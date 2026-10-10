@@ -382,7 +382,7 @@ any other secret: server-side only, never a `VITE_` variable.
 
 ## Configuration
 
-Set these in `infra/.env` (see `infra/.env.example` for the full commentary).
+These are the names the process reads. In `infra/.env` the four origins carry the `MCP_` prefix — `MCP_POSTGREST_URL`, `MCP_STUDIO_URL`, `MCP_PODCAST_URL`, `MCP_SPEECH_URL` — which `infra/docker-compose.yml` maps onto the container-level names below; every other variable keeps the same name in both places. See `infra/.env.example` for the full commentary.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
