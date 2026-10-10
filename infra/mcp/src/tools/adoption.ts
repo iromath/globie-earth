@@ -1,9 +1,9 @@
 // Adoption and eco-token tools: the stateful half of the server.
 //
 // These wrap the same RPCs the app calls (src/lib/api.ts recordPurchase) and the
-// same device-scoped tables that 030_rls.sql already pins to the caller. Nothing
-// here invents state: an adoption is the row api.create_adoption writes, a deed
-// is the row it issues, and a balance is the sum of api.eco_token_balance.
+// same device-scoped tables that the RLS policies already pin to the caller.
+// Nothing here invents state: an adoption is the row api.create_adoption writes,
+// a deed is the row it issues, and a balance is the sum of api.eco_token_balance.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -19,7 +19,7 @@ import { errorResult, jsonResult } from './result.js';
  */
 const TOKENS_PER_SAPLING = 100;
 
-/** What api.create_adoption returns (infra/schema/040_functions.sql). */
+/** What api.create_adoption returns (the create_adoption RPC). */
 interface AdoptionResult {
   adoption: { id: string; species_id: string; pledge_thb: number; pledge_usd: number };
   deed: {

@@ -1,6 +1,6 @@
 // Gives every DNP plant, wildlife and fauna row a photograph.
 //
-// 200_dnp_media.sql added photo_url/photo_source/photo_license/photo_credit/
+// The media enrichment added photo_url/photo_source/photo_license/photo_credit/
 // photo_ref to the three DNP layers (and a gbif_key to the two animal ones).
 // This fills them, so a reader can see what a species looks like - not just read
 // its name, family and IUCN status:
@@ -39,7 +39,7 @@
 // extmetadata rather than trusting the taxon.
 //
 // The plants already carry the GBIF usageKey they were matched to as gbif_key
-// (130_dnp_plants.sql), so their photo is fetched by that key with no matching
+// (the dnp_plants table), so their photo is fetched by that key with no matching
 // to redo. The animals have no key, so each distinct scientific_name is first
 // resolved once via species/match (EXACT, confidence 99 for the sampled Thai
 // names) and stored as gbif_key, then the photo is fetched by that key. Names

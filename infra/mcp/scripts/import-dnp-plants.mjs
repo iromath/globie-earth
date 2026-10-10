@@ -21,7 +21,7 @@
 // Set DNP_PLANTS_SKIP_GBIF=1 to import the checklist alone (fast, no English),
 // and DNP_PLANTS_CSV=<path> to import a local file instead of downloading.
 //
-// Why a direct connection instead of PostgREST: 130_dnp_plants.sql revokes
+// Why a direct connection instead of PostgREST: the dnp_plants table revokes
 // insert/update/delete from anon, so only the migration role may write, exactly
 // as backfill-embeddings.mjs does for api.embeddings.
 //

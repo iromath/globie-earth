@@ -5,13 +5,13 @@
 // Common" licence). Its resource is datastore_active, so the rows are read
 // straight from the CKAN DataStore API as typed JSON - no file to download and
 // parse, exactly like import-dnp.mjs does for the biodiversity survey. Only the
-// columns 140_dnp_fauna.sql declares are kept.
+// columns the dnp_fauna table declares are kept.
 //
 //   npm run build
 //   DATABASE_URL=postgres://globietree:globietree@localhost:5434/globietree \
 //     npm run import:dnp-fauna
 //
-// Why a direct connection instead of PostgREST: 140_dnp_fauna.sql revokes
+// Why a direct connection instead of PostgREST: the dnp_fauna table revokes
 // insert/update/delete from anon, so only the migration role may write, exactly
 // as backfill-embeddings.mjs does for api.embeddings.
 //
@@ -111,7 +111,7 @@ async function fetchPage(offset) {
 }
 
 /**
- * Maps one upstream record to the columns 140_dnp_fauna.sql declares. Names are
+ * Maps one upstream record to the columns the dnp_fauna table declares. Names are
  * trimmed (the park Thai name arrives trailing-padded); every absent value is
  * stored as NULL rather than an empty string.
  */

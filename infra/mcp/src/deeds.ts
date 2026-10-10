@@ -5,7 +5,7 @@
 // point: src/lib/api.ts fetchLivingDeeds() must not be able to drift from what
 // the MCP server reports, and neither should two copies of it inside the server.
 //
-// The read is device-scoped by 030_rls.sql, not by the query, so the caller's
+// The read is device-scoped by the RLS policies, not by the query, so the caller's
 // own X-Device-Id decides which rows come back.
 
 import type { Caller } from './identity.js';

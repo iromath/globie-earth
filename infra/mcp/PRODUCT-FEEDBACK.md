@@ -179,7 +179,7 @@ authorization" and "our tools cannot get authorization wrong".
 `Authorization: Bearer`, forwarded to PostgREST untouched.
 
 **What worked.** Because the token is forwarded, not interpreted, the account
-policies (`070_accounts.sql`) apply without this server knowing anything about
+policies apply without this server knowing anything about
 them. A device-only caller simply omits it.
 
 **What needed work.** GoTrue is a fine identity provider but **it is not an MCP

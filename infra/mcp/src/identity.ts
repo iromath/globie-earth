@@ -3,10 +3,10 @@
 // Globie Earth has two credentials (Dev-Docs/Amazon/AMAZON-MCP-PLAN.md 6):
 //
 //   - X-Device-Id: a uuid, also the RevenueCat appUserID. The RPCs read it as
-//     their identity via private.device_id(), and 030_rls.sql pins every
+//     their identity via private.device_id(), and the RLS policies pin every
 //     device-scoped row to it.
 //   - Authorization: Bearer <GoTrue JWT>: the optional account credential that
-//     070_accounts.sql matches. A device-only caller omits it.
+//     the account tables match. A device-only caller omits it.
 //
 // A raw MCP client (the Alexa+ host, a curl client, a small web demo) will not
 // mint a GoTrue JWT just to try the server, so the demo accepts a static bearer

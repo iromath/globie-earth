@@ -1,8 +1,8 @@
 // Enriches the DNP plant checklist (api.dnp_plants) from GBIF.
 //
-// 130_dnp_plants.sql stored each plant with its English common name resolved from
-// GBIF, 160_dnp_plants_enrich.sql added three more columns and
-// 170_dnp_plants_redlist_range.sql added a further four. This fills all of them,
+// The dnp_plants table stored each plant with its English common name resolved
+// from GBIF, GBIF enrichment added three more columns and a Red List / range
+// pass added a further four. This fills all of them,
 // so a listener can ask about a plant's genus, its synonyms, whether it grows wild
 // in Thailand, how threatened it is, and where in Thailand it has been recorded -
 // not just what it is called:
@@ -43,7 +43,7 @@
 // (its count is refolded from the bulk facet every run either way).
 // Delete that file to refetch everything.
 //
-// Why a direct connection instead of PostgREST: 130_dnp_plants.sql revokes
+// Why a direct connection instead of PostgREST: the dnp_plants table revokes
 // insert/update/delete from anon, so only the migration role may write, exactly
 // as backfill-embeddings.mjs does for api.embeddings.
 //

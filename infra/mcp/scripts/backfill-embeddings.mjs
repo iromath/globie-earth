@@ -1,6 +1,6 @@
 // Backfills api.embeddings from the seeded catalogue.
 //
-// 060_seed_catalog.sql deliberately ships no embeddings, so search_forest_knowledge
+// The catalog seed deliberately ships no embeddings, so search_forest_knowledge
 // and recommend_species honestly return nothing until the catalogue rows have
 // vectors. This script produces them with the *same* provider the server uses at
 // query time (`getEmbeddingProvider`: the local model by default, Amazon Titan
@@ -11,7 +11,7 @@
 //   DATABASE_URL=postgres://globietree:globietree@localhost:5434/globietree \
 //     npm run backfill:embeddings
 //
-// Why a direct connection instead of PostgREST: 030_rls.sql revokes all on
+// Why a direct connection instead of PostgREST: the RLS policies revoke all on
 // api.embeddings from anon, so only the migration role may write it - the tools
 // still read and write everything else through PostgREST and the caller's own
 // X-Device-Id, exactly as before. The catalogue vectors are global, not
@@ -21,7 +21,7 @@
 // Hugging Face hub once and cached. EMBEDDING_PROVIDER=bedrock instead needs AWS
 // credentials with Bedrock access (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or
 // an instance role) and amazon.titan-embed-text-v1 enabled in BEDROCK_REGION. The
-// stored vectors must also match the column: 180_embeddings_local.sql is 384
+// stored vectors must also match the column: the embeddings column is 384
 // wide for the local model, and Titan writes 1536.
 //
 // Exit 0: every entity was embedded and upserted.
@@ -56,16 +56,17 @@ const SOURCE_SQL = {
       'description', description, 'telemetry', telemetry
     ) order by sort_order, id), '[]'::json) from api.sites;`,
 
-  // External reference data (120_dnp.sql). Every survey row is embedded, so the
-  // catalog_search space is as complete as the imported survey; the provenance
-  // fields ride along in the content so a hit can state where it came from.
+  // External reference data (the dnp_species table). Every survey row is
+  // embedded, so the catalog_search space is as complete as the imported
+  // survey; the provenance fields ride along in the content so a hit can state
+  // where it came from.
   dnp_species: `select coalesce(json_agg(json_build_object(
       'id', id, 'scientific_name', scientific_name, 'thai_name', thai_name,
       'family', family, 'group_type', group_type, 'protected_area', protected_area,
       'forest_type', forest_type, 'survey_year_be', survey_year_be, 'synonyms', synonyms
     ) order by id), '[]'::json) from api.dnp_species;`,
 
-  // A second DNP artefact (130_dnp_plants.sql, enriched by 160/170_dnp_plants_*.sql):
+  // A second DNP artefact (the dnp_plants table, enriched from GBIF):
   // the national plant checklist, one row per species with a GBIF-resolved English
   // common name plus its genus, synonyms, native status, Red List category and Thai
   // occurrence signal. Every row is embedded so an English question lands on the
@@ -78,7 +79,7 @@ const SOURCE_SQL = {
       'th_provinces', th_provinces
     ) order by id), '[]'::json) from api.dnp_plants;`,
 
-  // A third DNP artefact (140_dnp_fauna.sql): fauna observed inside national parks,
+  // A third DNP artefact (the dnp_fauna table): fauna observed inside national parks,
   // one row per (park, species) observation, with taxonomy and conservation status.
   // The park and province ride along so "what lives in Khao Yai?" lands here.
   dnp_fauna: `select coalesce(json_agg(json_build_object(
@@ -89,7 +90,7 @@ const SOURCE_SQL = {
       'habitat', habitat, 'distribution', distribution, 'province', province
     ) order by id), '[]'::json) from api.dnp_fauna;`,
 
-  // A fourth DNP artefact (150_dnp_wildlife.sql): the national wildlife checklist
+  // A fourth DNP artefact (the dnp_wildlife table): the national wildlife checklist
   // merged with the statutory protected/reserved lists. The English common name is
   // written first in the content so an English query lands on this row.
   dnp_wildlife: `select coalesce(json_agg(json_build_object(
@@ -317,7 +318,7 @@ if (jobs.length === 0) {
 /** Rows per upsert. Keeps each statement small while limiting round-trips. */
 const BATCH_SIZE = 500;
 
-/** The ANN index over `embedding`, named as 180_embeddings_local.sql creates it. */
+/** The ANN index over `embedding`, named as the embeddings schema creates it. */
 const HNSW_INDEX = 'api.embeddings_hnsw_idx';
 
 /**

@@ -425,8 +425,7 @@ process — the server starts and reports what is unconfigured on `/health`.
 multilingual-e5-small** model (`Xenova/multilingual-e5-small` through
 transformers.js/ONNX, 384 dimensions) running in-process. It needs no account
 and bills nothing, so it is the default; the `vector(384)` column and
-`catalog_search`'s parameter match its width
-(`infra/schema/180_embeddings_local.sql`).
+`catalog_search`'s parameter match its width.
 
 `EMBEDDING_PROVIDER=bedrock` selects **Amazon Titan Text Embeddings V1**
 (`amazon.titan-embed-text-v1`, 1536 dimensions) instead, kept for the AWS

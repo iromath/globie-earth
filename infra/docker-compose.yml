@@ -7,9 +7,9 @@
 # Every byte of data the server reads comes over the live Globie Earth HTTP APIs
 # (api.globie.earth, studio.globie.earth, podcast.globie.earth), so there is no
 # local Postgres, no seeding and nothing to migrate — `docker compose up` talks
-# to the same backend the production app does. The database schema ships under
-# infra/schema/ as the *API contract* those origins expose, not as something this
-# stack loads.
+# to the same backend the production app does. The database schema is not part of
+# this repo — the MCP reads everything live over the API — so nothing here loads
+# or migrates it.
 name: globie
 
 services:
@@ -21,7 +21,7 @@ services:
   # It does NOT connect to Postgres directly: it calls PostgREST over HTTP
   # (POSTGREST_URL) and forwards the caller's own X-Device-Id / Bearer headers.
   # That is deliberate — the RPCs derive their identity from private.device_id()
-  # and 030_rls.sql pins every row to it, so a direct database connection here
+  # and the RLS policies pin every row to it, so a direct database connection here
   # would silently bypass row-level security.
   mcp:
     build:

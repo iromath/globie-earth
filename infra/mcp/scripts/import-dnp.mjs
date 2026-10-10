@@ -4,13 +4,14 @@
 // biodiversity-survey-species, Forest Research Office, "Open Data Common"
 // licence). Its master resource is datastore_active, so the rows are read
 // straight from the CKAN DataStore API as typed JSON - no XLSX to download and
-// parse, no CSV to split. Only the columns 120_dnp.sql declares are kept.
+// parse, no CSV to split. Only the columns the dnp_species table declares
+// are kept.
 //
 //   npm run build
 //   DATABASE_URL=postgres://globietree:globietree@localhost:5434/globietree \
 //     npm run import:dnp
 //
-// Why a direct connection instead of PostgREST: 120_dnp.sql revokes
+// Why a direct connection instead of PostgREST: the dnp_species table revokes
 // insert/update/delete from anon, so only the migration role may write, exactly
 // as backfill-embeddings.mjs does for api.embeddings.
 //
@@ -107,7 +108,7 @@ async function fetchPage(offset) {
   return { records, total: Number(payload.result.total ?? records.length) };
 }
 
-/** Maps one upstream record to the columns 120_dnp.sql declares. */
+/** Maps one upstream record to the columns the dnp_species table declares. */
 function toRow(record) {
   const scientific = record['ชื่อวิทยาศาสตร์'];
   const thai = record['ชื่อไทย'];

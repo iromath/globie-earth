@@ -1,9 +1,8 @@
 // The embedding provider, behind one interface.
 //
-// api.embeddings.embedding is vector(384) (infra/schema/180_embeddings_local.sql)
-// and api.catalog_search takes a *caller-computed* query vector
-// (infra/schema/040_functions.sql), so this service is the only place that needs
-// to turn text into a vector.
+// api.embeddings.embedding is vector(384) and api.catalog_search takes a
+// *caller-computed* query vector (the catalog_search RPC), so this service is
+// the only place that needs to turn text into a vector.
 //
 // Two providers, each with its own vector space:
 //
@@ -16,7 +15,7 @@
 //
 // One rule the code cannot enforce: the catalogue rows must be produced by the
 // *same* model as the queries, or cosine similarity is comparing two unrelated
-// spaces. 060_seed_catalog.sql deliberately ships no embeddings, so this is a
+// spaces. The catalog seed deliberately ships no embeddings, so this is a
 // fresh choice rather than a swap - and until a backfill runs with this exact
 // provider, catalog_search honestly returns nothing.
 
@@ -105,7 +104,7 @@ async function bedrockUsage(text: string): Promise<EmbeddingUsage> {
       `Bedrock returned an embedding that is not ${TITAN_DIMS} numbers, so it ` +
         'cannot be compared against api.embeddings. Check that ' +
         `${TITAN_V1} is enabled in BEDROCK_REGION, and that the schema is still ` +
-        'vector(1536) - 180_embeddings_local.sql moved it to 384 for the local model.',
+        'vector(1536) - the embeddings column was moved to 384 for the local model.',
     );
   }
 

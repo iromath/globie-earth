@@ -78,7 +78,7 @@ const MAX_VIDEOS = 1;
 const MAX_FRAMES_PER_VIDEO = 4;
 
 /**
- * The four DNP reference universes that carry photographs. 234_dnp_species_media.sql
+ * The four DNP reference universes that carry photographs. The DNP species media
  * gave the survey (`dnp_species`) a photo column and admitted it to the
  * species_type check, so a survey species page can be contributed to like the
  * other three. Mirrored in src/lib/contribute.ts (CONTRIBUTABLE_TYPES) and
@@ -871,7 +871,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
    *
    * Ownership is enforced twice: this route reads the row pinned to the
    * caller's own device_id, and the final DELETE repeats the pin. RLS is the
-   * real guard (species_contributions_delete, 220_species_contributions.sql);
+   * real guard (species_contributions_delete, the contributions table);
    * the pins only make a wrong id read as 404 rather than as someone else's.
    *
    * The order is deliberate. The objects go first and a storage failure aborts

@@ -1,6 +1,6 @@
 // Catalogue tools: semantic search and species recommendation.
 //
-// Both wrap RPCs that already exist (infra/schema/040_functions.sql) and return
+// Both wrap the existing catalog_search and recommend_species RPCs and return
 // the same facts the app's src/lib/api.ts reads - no new claims, no invented
 // data. Each result is scoped to the caller by the identity forwarded in
 // postgrest.ts, not by anything the caller can pass in.
@@ -58,7 +58,7 @@ interface SiteKeywordRow {
   description: string;
 }
 
-/** One api.dnp_species row (infra/schema/120_dnp.sql). */
+/** One api.dnp_species row (the dnp_species table). */
 interface DnpKeywordRow {
   id: number;
   scientific_name: string | null;
@@ -70,7 +70,7 @@ interface DnpKeywordRow {
 }
 
 /**
- * One api.dnp_plants row (infra/schema/130_dnp_plants.sql). A checklist entry
+ * One api.dnp_plants row (the dnp_plants table). A checklist entry
  * has no location or year; its English name comes from GBIF and is null when
  * GBIF documents none.
  */
@@ -83,7 +83,7 @@ interface DnpPlantKeywordRow {
   genus: string | null;
   synonyms: string | null;
   native_status: string | null;
-  // Added by 170_dnp_plants_redlist_range.sql from GBIF: the Red List category,
+  // Enriched from GBIF: the Red List category,
   // the number of Thai occurrence records and the provinces they fall in.
   iucn_status: string | null;
   th_record_count: number | null;
@@ -91,7 +91,7 @@ interface DnpPlantKeywordRow {
 }
 
 /**
- * One api.dnp_fauna row (infra/schema/140_dnp_fauna.sql) - a species observed
+ * One api.dnp_fauna row (the dnp_fauna table) - a species observed
  * inside a national park, with the park it was recorded in.
  */
 interface DnpFaunaKeywordRow {
@@ -107,7 +107,7 @@ interface DnpFaunaKeywordRow {
 }
 
 /**
- * One api.dnp_wildlife row (infra/schema/150_dnp_wildlife.sql) - the national
+ * One api.dnp_wildlife row (the dnp_wildlife table) - the national
  * checklist, with the statutory protected/reserved flags.
  */
 interface DnpWildlifeKeywordRow {
@@ -318,9 +318,10 @@ async function keywordSearch(
 
   if (!entityType || entityType === 'dnp_species') {
     // The survey is ~61k rows, so the match is pushed down to Postgres as a
-    // trigram ILIKE `or` (dnp_species_scientific_trgm_idx / _thai_trgm_idx,
-    // 120_dnp.sql) rather than fetched whole and filtered here, and the page is
-    // bounded. Terms are capped so the url filter cannot grow without limit.
+    // trigram ILIKE `or` (dnp_species_scientific_trgm_idx / _thai_trgm_idx, the
+    // dnp_species table) rather than fetched whole and filtered here, and the
+    // page is bounded. Terms are capped so the url filter cannot grow without
+    // limit.
     const columns = ['scientific_name', 'thai_name', 'family', 'protected_area', 'forest_type'];
     const filters = terms
       .slice(0, 4)
@@ -420,9 +421,9 @@ async function keywordSearch(
   if (!entityType || entityType === 'dnp_fauna') {
     // The fauna observations are ~5k rows, so the match is pushed down to
     // Postgres as a trigram ILIKE `or` (dnp_fauna_scientific_trgm_idx /
-    // _thai_trgm_idx / _area_trgm_idx, 140_dnp_fauna.sql) rather than fetched
-    // whole and filtered here, and the page is bounded. Terms are capped so the
-    // url filter cannot grow without limit.
+    // _thai_trgm_idx / _area_trgm_idx, the dnp_fauna table) rather than
+    // fetched whole and filtered here, and the page is bounded. Terms are
+    // capped so the url filter cannot grow without limit.
     const columns = ['scientific_name', 'thai_name', 'protected_area', 'protected_area_en', 'family'];
     const filters = terms
       .slice(0, 4)
@@ -473,9 +474,9 @@ async function keywordSearch(
   if (!entityType || entityType === 'dnp_wildlife') {
     // The checklist is ~2k rows, so the match is pushed down to Postgres as a
     // trigram ILIKE `or` (dnp_wildlife_scientific_trgm_idx / _thai_trgm_idx /
-    // _english_trgm_idx, 150_dnp_wildlife.sql) rather than fetched whole and
-    // filtered here, and the page is bounded. Terms are capped so the url filter
-    // cannot grow without limit.
+    // _english_trgm_idx, the dnp_wildlife table) rather than fetched whole and
+    // filtered here, and the page is bounded. Terms are capped so the url
+    // filter cannot grow without limit.
     const columns = ['scientific_name', 'thai_name', 'english_name', 'family'];
     const filters = terms
       .slice(0, 4)
@@ -638,7 +639,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
             p_match_count: rerank.enabled ? rerank.pool : SEARCH_RESULTS,
             p_entity_type: entity_type ?? null,
             // The raw text, so catalog_search can lift a row whose name actually
-            // matches the question (247_catalog_search_ranking.sql) instead of
+            // matches the question (the catalog_search ranking) instead of
             // trusting cosine alone - a small model's cosine floor is high and
             // near-neighbours differ by ~0.01, so an absolute score cannot tell
             // a match from a neighbour.

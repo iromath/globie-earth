@@ -1,10 +1,10 @@
 // The moderation route: the second half of the photo-contribution feature.
 //
 // /contribute ends by storing a visitor's photograph as a `pending` row
-// (infra/schema/220_species_contributions.sql) and saying that accepting it is
+// (the contributions table) and saying that accepting it is
 // "a separate human act". This route is that act. It lets a moderator read the
 // queue and move a row pending -> approved | rejected, and an `approved` row is
-// the one the species page can show (infra/schema/230_species_contributions_approval.sql).
+// the one the species page can show (the contribution-approval RPC).
 //
 // Two things are deliberately NOT decided here:
 //

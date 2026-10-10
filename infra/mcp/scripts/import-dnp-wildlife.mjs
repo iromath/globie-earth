@@ -25,7 +25,7 @@
 // Set DNP_WILDLIFE_PDFS=<dir> to parse local PDFs instead of downloading them,
 // and DNP_WILDLIFE_PACKAGE / DNP_WILDLIFE_DATASET to point at other packages.
 //
-// Why a direct connection instead of PostgREST: 150_dnp_wildlife.sql revokes
+// Why a direct connection instead of PostgREST: the dnp_wildlife table revokes
 // insert/update/delete from anon, so only the migration role may write, exactly
 // as backfill-embeddings.mjs does for api.embeddings.
 //

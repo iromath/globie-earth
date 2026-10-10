@@ -164,7 +164,7 @@ function apiBase(): string | null {
  * The podcast and studio proxies answer 401 "That device has not been
  * registered by this app." for a uuid that is not in api.devices, and unlike
  * the app's own RPCs they never create it. PostgREST's devices_insert policy
- * lets a caller register its own id (infra/schema/030_rls.sql), so the host
+ * lets a caller register its own id (the RLS policies), so the host
  * upserts it here exactly as src/lib/api.ts ensureDevice() does for the app.
  * Failure is not fatal: the session still opens, and a device-gated tool then
  * returns its own explaining error.

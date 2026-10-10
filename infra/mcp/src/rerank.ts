@@ -3,7 +3,7 @@
 // The retrieval path is deliberately LLM-free up to this point: the query is
 // embedded by the small self-hosted model (Xenova/multilingual-e5-small, 384
 // dims) and api.catalog_search returns the nearest passages, with a title-only
-// lexical lift added by 247_catalog_search_ranking.sql. But a 384-dim e5 model's
+// lexical lift added by the catalog search ranking. But a 384-dim e5 model's
 // cosine floor is high and its near-neighbours differ by ~0.01, so the *order*
 // of the top rows is often wrong even when the right passage is present in the
 // pool - the answer's first line is the wrong passage, not a missing one.

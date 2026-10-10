@@ -2,8 +2,9 @@
 //
 // The resources half of the MCP surface - the same catalogue rows the app
 // renders, addressed by URI and (for the small tables) discoverable through each
-// template's list callback. None of these tables is device-scoped: 030_rls.sql,
-// 120_dnp.sql and 130_dnp_plants.sql make them world-readable, so the caller's
+// template's list callback. None of these tables is device-scoped: the RLS
+// policies, the dnp_species table and the dnp_plants table make them
+// world-readable, so the caller's
 // identity does not narrow what comes back. The payloads mirror src/lib/api.ts's
 // own row-to-view mapping rather than re-inventing field names, so a host reads
 // the same shape the screens do. The DNP data (the biodiversity survey, the
@@ -22,7 +23,7 @@ import type { Caller } from '../identity.js';
 import { get } from '../postgrest.js';
 import { fetchWikiSummary, type WikiSummary } from '../wiki.js';
 
-/** One api.species row (infra/schema/020_tables.sql). */
+/** One api.species row (the species table). */
 interface SpeciesRow {
   id: string;
   name: string;
@@ -70,7 +71,7 @@ interface SiteRow {
   additional_photos: unknown[];
 }
 
-/** One api.dnp_species row (infra/schema/120_dnp.sql) - external survey data. */
+/** One api.dnp_species row (the dnp_species table) - external survey data. */
 interface DnpRow {
   id: number;
   resource_id: string;
@@ -88,7 +89,7 @@ interface DnpRow {
   imported_at: string;
 }
 
-/** One api.dnp_plants row (infra/schema/130_dnp_plants.sql) - external checklist. */
+/** One api.dnp_plants row (the dnp_plants table) - external checklist. */
 interface DnpPlantRow {
   id: number;
   resource_id: string;
@@ -103,19 +104,19 @@ interface DnpPlantRow {
   gbif_key: number | null;
   gbif_match_type: string | null;
   gbif_confidence: number | null;
-  // Added by 160_dnp_plants_enrich.sql from GBIF: the genus, the accepted-name
+  // Enriched from GBIF: the genus, the accepted-name
   // synonyms, and whether the species is native/introduced/cultivated in Thailand.
   genus: string | null;
   synonyms: string | null;
   native_status: string | null;
-  // Added by 170_dnp_plants_redlist_range.sql from GBIF: the Red List category,
+  // Enriched from GBIF: the Red List category,
   // the number of Thai occurrence records, the provinces they fall in, and the
   // Maps v2 density-tile template for the species in Thailand.
   iucn_status: string | null;
   th_record_count: number | null;
   th_provinces: string | null;
   map_tile_url: string | null;
-  // Added by 200_dnp_media.sql from GBIF occurrence media: a photograph of the
+  // Enriched from GBIF occurrence media: a photograph of the
   // species (iNaturalist-preferred) and its provenance, so a reader can show -
   // and correctly credit - what the plant looks like.
   photo_url: string | null;
@@ -126,7 +127,7 @@ interface DnpPlantRow {
   imported_at: string;
 }
 
-/** One api.dnp_fauna row (infra/schema/140_dnp_fauna.sql) - national-park fauna. */
+/** One api.dnp_fauna row (the dnp_fauna table) - national-park fauna. */
 interface DnpFaunaRow {
   id: number;
   resource_id: string;
@@ -152,7 +153,7 @@ interface DnpFaunaRow {
   province: string | null;
   latitude: number | null;
   longitude: number | null;
-  // Added by 200_dnp_media.sql: the GBIF usageKey resolved from scientific_name,
+  // Enriched from GBIF occurrence media: the GBIF usageKey resolved from scientific_name,
   // and a photograph of the species (GBIF occurrence media, iNaturalist-
   // preferred) with its provenance.
   gbif_key: number | null;
@@ -164,7 +165,7 @@ interface DnpFaunaRow {
   imported_at: string;
 }
 
-/** One api.dnp_wildlife row (infra/schema/150_dnp_wildlife.sql) - national checklist. */
+/** One api.dnp_wildlife row (the dnp_wildlife table) - national checklist. */
 interface DnpWildlifeRow {
   id: number;
   resource_id: string;
@@ -187,7 +188,7 @@ interface DnpWildlifeRow {
   cites_status: string | null;
   seasonal_status: string | null;
   note: string | null;
-  // Added by 200_dnp_media.sql: the GBIF usageKey resolved from scientific_name,
+  // Enriched from GBIF occurrence media: the GBIF usageKey resolved from scientific_name,
   // and a photograph of the species (GBIF occurrence media, iNaturalist-
   // preferred) with its provenance.
   gbif_key: number | null;
@@ -455,13 +456,13 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
         scientificName: row.scientific_name,
         thaiName: row.thai_name ?? undefined,
         family: row.family ?? undefined,
-        // Enriched from GBIF (160_dnp_plants_enrich.sql): the genus, the accepted
+        // Enriched from GBIF: the genus, the accepted
         // synonyms and how the species relates to Thailand. Each stays off the
         // object when GBIF documents nothing for it.
         genus: row.genus ?? undefined,
         synonyms: row.synonyms ?? undefined,
         nativeStatus: row.native_status ?? undefined,
-        // Added by 170_dnp_plants_redlist_range.sql from GBIF: how threatened the
+        // Enriched from GBIF: how threatened the
         // species is, how many records GBIF holds for it in Thailand and where,
         // and the Maps v2 density-tile template for it (with {z}/{x}/{y} for the
         // reader to fill). thRecordCount keeps a real 0; each field stays off the
@@ -472,7 +473,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
         mapTileUrl: row.map_tile_url ?? undefined,
         // External Wikipedia context for the species, when it has an article.
         wikipedia,
-        // Added by 200_dnp_media.sql: a photograph of the species (GBIF
+        // Enriched from GBIF occurrence media: a photograph of the species (GBIF
         // occurrence media, iNaturalist-preferred) with the provenance needed to
         // display it and credit it. Each stays off the object when GBIF holds no
         // image for the species.
@@ -546,7 +547,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
         longitude: row.longitude ?? undefined,
         // External Wikipedia context for the species, when it has an article.
         wikipedia,
-        // Added by 200_dnp_media.sql: the resolved GBIF usageKey and a photograph
+        // Enriched from GBIF occurrence media: the resolved GBIF usageKey and a photograph
         // of the species (GBIF occurrence media, iNaturalist-preferred) with its
         // provenance. Each stays off the object when GBIF holds no image.
         gbifKey: row.gbif_key ?? undefined,
@@ -613,9 +614,9 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
         note: row.note ?? undefined,
         // External Wikipedia context for the species, when it has an article.
         wikipedia,
-        // Added by 200_dnp_media.sql: the resolved GBIF usageKey and a photograph
-        // of the species (GBIF occurrence media, iNaturalist-preferred) with its
-        // provenance. Each stays off the object when GBIF holds no image.
+        // Enriched from GBIF occurrence media: the resolved GBIF usageKey and a
+        // photograph of the species (GBIF occurrence media, iNaturalist-preferred)
+        // with its provenance. Each stays off the object when GBIF holds no image.
         gbifKey: row.gbif_key ?? undefined,
         photoUrl: row.photo_url ?? undefined,
         photoSource: row.photo_source ?? undefined,

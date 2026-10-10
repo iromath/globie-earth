@@ -2,13 +2,13 @@
 //
 // The MCP server talks HTTP to PostgREST rather than opening its own Postgres
 // connection on purpose. The RPCs derive the caller from the X-Device-Id header
-// (private.device_id(), infra/schema/040_functions.sql) and 030_rls.sql pins
+// (private.device_id(), the API's RPCs) and the RLS policies pin
 // every device-scoped row to it; forwarding the caller's own headers is what
 // makes that identity model hold. A direct connection as the migration role -
 // the way `studio` reads api.studio_tracks - would bypass RLS and force every
 // tool to re-scope by device itself, which is exactly the bug RLS prevents.
 //
-// Signing in adds an optional GoTrue JWT on top (070_accounts.sql); it is
+// Signing in adds an optional GoTrue JWT on top (the account tables); it is
 // forwarded untouched, never interpreted here.
 
 import type { Caller } from './identity.js';
@@ -63,9 +63,9 @@ async function request<T>(
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         Accept: 'application/json',
-        // The device credential. See infra/schema/030_rls.sql.
+        // The device credential. See the RLS policies.
         'X-Device-Id': caller.deviceId,
-        // The account credential, when there is one. See 070_accounts.sql.
+        // The account credential, when there is one. See the account tables.
         ...(caller.bearer ? { Authorization: `Bearer ${caller.bearer}` } : {}),
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...headers,
