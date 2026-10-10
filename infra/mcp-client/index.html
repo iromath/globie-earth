@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Globie Earth — MCP client</title>
+    <meta
+      name="description"
+      content="A real Model Context Protocol client for the Globie Earth MCP server."
+    />
+  </head>
+  <body>
+    <div class="app">
+      <header class="masthead">
+        <p class="eyebrow">Alexa+ track · runtime hook</p>
+        <h1>Globie Earth <span class="thin">MCP client</span></h1>
+        <p class="tagline">
+          This page <strong>is</strong> an MCP host. It talks to the Globie Earth server over
+          Streamable HTTP with the official MCP SDK — the same code path an Alexa+ host
+          uses — runs the <code>initialize</code> handshake, then lists and calls whatever
+          the server advertises. The tool forms below are built from the JSON Schema the
+          server returns, so nothing about the surface is hard-coded here.
+        </p>
+      </header>
+
+      <section class="panel" aria-labelledby="connect-heading">
+        <h2 id="connect-heading">1 · Connect</h2>
+        <form id="connect-form" class="grid-form" autocomplete="off">
+          <label>
+            <span>MCP endpoint</span>
+            <input id="field-url" type="url" spellcheck="false" />
+          </label>
+          <label>
+            <span>Device id (<code>X-Device-Id</code>)</span>
+            <input id="field-device" type="text" spellcheck="false" />
+          </label>
+          <label>
+            <span>Demo bearer token <em>(optional)</em></span>
+            <input
+              id="field-token"
+              type="password"
+              spellcheck="false"
+              autocomplete="new-password"
+              data-bwignore="true"
+              data-1p-ignore
+              data-lpignore="true"
+              placeholder="MCP_BEARER_TOKEN"
+            />
+          </label>
+          <div class="actions">
+            <button id="connect-button" type="submit">Connect</button>
+            <button id="disconnect-button" type="button" disabled>Disconnect</button>
+          </div>
+        </form>
+        <p class="hint" id="connect-hint">
+          The device id is a uuid and is also the RevenueCat <code>appUserID</code>; the
+          server's row-level security uses it to scope your deeds and balance. A demo
+          bearer token, when the server has one configured, is exchanged at the edge for a
+          demo device id — it is not MCP OAuth.
+        </p>
+        <p class="status" id="connect-status" role="status"></p>
+      </section>
+
+      <section class="panel" id="handshake-panel" hidden aria-labelledby="handshake-heading">
+        <h2 id="handshake-heading">2 · Handshake</h2>
+        <p class="hint">
+          What the server returned from <code>initialize</code>. If you can read this, a
+          real MCP session exists.
+        </p>
+        <dl class="facts" id="handshake-facts"></dl>
+        <details id="instructions-wrap" hidden>
+          <summary>Server instructions</summary>
+          <pre id="instructions" class="mono"></pre>
+        </details>
+      </section>
+
+      <section class="panel" id="voice-panel" hidden aria-labelledby="voice-heading">
+        <h2 id="voice-heading">3 · Ask the forest by voice</h2>
+        <p class="hint" id="voice-support"></p>
+        <div class="voice-row">
+          <button id="mic-button" type="button">Speak</button>
+          <input id="voice-query" type="text" placeholder="which tree fixes paddy soil" />
+          <button id="ask-button" type="button">Ask</button>
+          <button id="stop-speaking" type="button" hidden>Stop reading</button>
+        </div>
+        <!-- The model ids mirror ROUTER_MODELS in infra/mcp/src/router.ts; the server refuses any other name. -->
+        <div class="voice-row">
+          <label class="voice-field">
+            <span>Router model</span>
+            <select id="voice-model">
+              <option value="deepseek-flash">deepseek-flash</option>
+              <option value="deepseek-v4-flash-vision-exp">deepseek-v4-flash-vision-exp · vision</option>
+            </select>
+          </label>
+          <label class="voice-field">
+            <span>Photo <em>(optional — needs the vision model)</em></span>
+            <input id="voice-image" type="file" accept="image/*" />
+          </label>
+          <!-- Narrow a search to one DNP reference dataset by voice. The host only passes this
+               value through when the routed tool actually declares an entity_type argument
+               (see ask() in src/main.ts), so it can never corrupt an unrelated call. -->
+          <label class="voice-field">
+            <span>Source <em>(optional)</em></span>
+            <select id="voice-source">
+              <option value="">Any source (Globie + DNP)</option>
+              <option value="dnp_species">DNP biodiversity survey</option>
+              <option value="dnp_plant">DNP plant checklist</option>
+              <option value="dnp_fauna">DNP park fauna observations</option>
+              <option value="dnp_wildlife">DNP wildlife checklist</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint" id="voice-image-note" hidden></p>
+        <p class="status" id="voice-status" role="status"></p>
+        <div class="result" id="voice-result"></div>
+      </section>
+
+      <section class="panel" id="surface-panel" hidden aria-labelledby="surface-heading">
+        <h2 id="surface-heading">4 · The surface the server advertises</h2>
+        <div class="tabs" role="tablist">
+          <button class="tab" data-tab="tools" role="tab" aria-selected="true">Tools</button>
+          <button class="tab" data-tab="resources" role="tab" aria-selected="false">Resources</button>
+          <button class="tab" data-tab="prompts" role="tab" aria-selected="false">Prompts</button>
+          <button class="tab" data-tab="transcript" role="tab" aria-selected="false">Transcript</button>
+        </div>
+
+        <div class="tab-panel" id="tab-tools" role="tabpanel"></div>
+        <div class="tab-panel" id="tab-resources" role="tabpanel" hidden></div>
+        <div class="tab-panel" id="tab-prompts" role="tabpanel" hidden></div>
+        <div class="tab-panel" id="tab-transcript" role="tabpanel" hidden>
+          <p class="hint">
+            An operation log of this session — method, direction and what came back — not a
+            packet capture. Export it as evidence that the tools were really called at
+            runtime.
+          </p>
+          <div class="actions">
+            <button id="copy-transcript" type="button">Copy JSON</button>
+            <button id="download-transcript" type="button">Download JSON</button>
+          </div>
+          <ol class="transcript" id="transcript"></ol>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

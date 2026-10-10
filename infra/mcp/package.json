@@ -1,0 +1,38 @@
+{
+  "name": "globie-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Globie Earth MCP server - forest knowledge, species recommendation and sanctuary tools over Streamable HTTP.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "dev": "tsc -p tsconfig.json && node dist/server.js",
+    "simulate:alexa": "node --env-file=../.env scripts/simulate-alexa-plus.mjs",
+    "backfill:embeddings": "node --env-file=../.env scripts/backfill-embeddings.mjs",
+    "import:dnp": "node --env-file=../.env scripts/import-dnp.mjs",
+    "import:dnp-plants": "node --env-file=../.env scripts/import-dnp-plants.mjs",
+    "import:dnp-fauna": "node --env-file=../.env scripts/import-dnp-fauna.mjs",
+    "import:dnp-wildlife": "node --env-file=../.env scripts/import-dnp-wildlife.mjs",
+    "enrich:dnp-plants": "node --env-file=../.env scripts/enrich-dnp-plants.mjs",
+    "enrich:dnp-media": "node --env-file=../.env scripts/enrich-dnp-media.mjs",
+    "watch:embeddings": "node --env-file=../.env scripts/watch-bedrock.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1146.0",
+    "@aws-sdk/client-s3": "^3.1147.0",
+    "@fastify/cors": "^11.3.0",
+    "@huggingface/transformers": "^4.3.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "fastify": "^5.12.5",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^7.0.2"
+  }
+}

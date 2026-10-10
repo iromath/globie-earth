@@ -1,0 +1,123 @@
+# Globie Earth — MCP client
+
+A real **Model Context Protocol** client for the Globie Earth MCP server, and the
+runtime hook the **Alexa+ track** asks for.
+
+This page *is* an MCP host. It opens a Streamable HTTP session against the server
+with the official [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk),
+runs the `initialize` handshake, then lists and calls whatever the server
+advertises. The tool forms are built from the JSON Schema each tool returns, so
+nothing about the surface is hard-coded here — add a tool to the server and it
+appears.
+
+That distinction matters for judging: the MCP server is not named in a README and
+left un-called. This is a client running the same code path a host runs.
+
+## Run it
+
+```bash
+cd infra/mcp-client
+npm install
+npm run dev          # http://localhost:5173
+```
+
+Then, in the page:
+
+1. **MCP endpoint** — prefilled to `http://localhost:8092/mcp` on a local host,
+   or `https://mcp.globie.earth/mcp` anywhere else. Type over it to point
+   somewhere else.
+2. **Device id** (`X-Device-Id`) — a uuid, generated once and kept in
+   `localStorage`. It is the RevenueCat `appUserID`; the server's row-level
+   security uses it to scope your deeds and eco balance, so the same id sees the
+   same history on every visit.
+3. **Demo bearer token** — optional. Only needed when the server has
+   `MCP_BEARER_TOKEN` set.
+
+Click **Connect**. The **Handshake** panel then shows the server name, protocol
+version, session id and capabilities that `initialize` actually returned.
+
+## Point it at a local server
+
+```bash
+cd infra/mcp
+npm install
+npm run build
+POSTGREST_URL=http://localhost:3001 EMBEDDING_PROVIDER=none PORT=8092 npm start
+```
+
+`EMBEDDING_PROVIDER=none` is a valid configuration, not a broken one: every tool
+works, and `search_forest_knowledge` explains that semantic search is switched
+off instead of returning an empty result.
+
+## CORS — the one thing that will trip you up
+
+The browser sends an `Origin` header, so the server must allow this page's origin
+via `MCP_CORS_ORIGINS`. Locally that is the default:
+
+```
+MCP_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+```
+
+Deploying this client anywhere else means adding its origin to that list — a
+literal match, not a wildcard. Non-browser MCP hosts send no `Origin` and are
+unaffected.
+
+If the connect fails with *"Could not reach the endpoint"*, the page says so
+plainly; check that the server is up and that its `MCP_CORS_ORIGINS` includes
+`window.location.origin`. (A CORS failure looks identical to a dead server from
+`fetch`, which is why the message names both.)
+
+## Verify the build
+
+```bash
+npm run typecheck    # tsc --noEmit
+npm run build        # tsc + vite build → dist/
+npm run preview      # serve dist/ on http://localhost:4173
+```
+
+The production build bundles the MCP SDK into the browser bundle — the SDK's
+Streamable HTTP transport and `Client` import no `node:` built-ins, so a real MCP
+client runs in a browser with no polyfills.
+
+## The router model and photos
+
+The **Voice** panel adds two controls to the ask row:
+
+- **Router model** — which model `POST /route` uses: `deepseek-flash` (text) or
+  `deepseek-v4-flash-vision-exp` (reads a photo). The ids mirror `ROUTER_MODELS`
+  in `infra/mcp/src/router.ts`; the server refuses any other name.
+- **Photo** *(optional)* — attach an image for the vision model. The page
+  downscales it to a 1024-px edge and sends it as a JPEG data URL with your next
+  question, and only to the vision model. With a text-only model selected, the
+  server refuses the photo rather than ignoring it.
+
+The page never holds a model key. It sends a model *name* to the server, which
+owns the credential, and the answer says which model answered (`via …`).
+
+## Evidence, not vibes
+
+The **Transcript** tab is an operation log of the session — method, direction and
+what came back — and it exports as JSON. Copy or download it to show that the
+tools were really called at runtime. It is a client-side log, not a packet
+capture, and it is labelled as such.
+
+## What this is not
+
+- The demo bearer token is exchanged at the MCP edge for a device identity. It is
+  **not MCP OAuth 2.1**, and the page does not claim it is.
+- The microphone button uses the **Web Speech API**, not an Alexa wake word. It
+  is a convenience for the demo; the MCP surface is the point.
+- Voice answers are read aloud by the browser's speech synthesis. Where the
+  browser has no support, the page says so rather than failing silently.
+
+## Files
+
+| Path | What it is |
+| --- | --- |
+| `src/mcp.ts` | The MCP client wrapper — connect, list tools/resources/prompts, call/read/render, and the transcript. |
+| `src/main.ts` | DOM wiring: handshake panel, tool forms from JSON Schema, per-tab rendering. |
+| `src/voice.ts` | Web Speech API in/out, with graceful fallback when unsupported. |
+| `src/style.css` | The dark-forest styling. |
+| `index.html` | The four panels: Connect, Handshake, Voice, Surface. |
+| `Dockerfile` | The nginx static-build image: a Node build stage runs `npm run build`, then nginx serves `dist/`. |
+| `nginx.conf` | Cache policy — hashed assets immutable, `index.html` revalidated, SPA fallback. |

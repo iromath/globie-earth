@@ -1,0 +1,135 @@
+# Globie Earth — the Alexa+ track submission stack.
+#
+# This is a deliberately small two-service Compose file: the MCP server (the
+# submission itself) and the demo browser MCP client that proves a real MCP host
+# can drive it. It is not the whole product.
+#
+# Every byte of data the server reads comes over the live Globie Earth HTTP APIs
+# (api.globie.earth, studio.globie.earth, podcast.globie.earth), so there is no
+# local Postgres, no seeding and nothing to migrate — `docker compose up` talks
+# to the same backend the production app does. The database schema ships under
+# infra/schema/ as the *API contract* those origins expose, not as something this
+# stack loads.
+name: globie
+
+services:
+  # The Globie Earth MCP server: the Alexa+ track submission. It exposes the
+  # app's catalogue, adoption and sanctuary capabilities over MCP Streamable
+  # HTTP, so an Alexa+ (or any MCP) host can drive the same reforestation
+  # backend by voice.
+  #
+  # It does NOT connect to Postgres directly: it calls PostgREST over HTTP
+  # (POSTGREST_URL) and forwards the caller's own X-Device-Id / Bearer headers.
+  # That is deliberate — the RPCs derive their identity from private.device_id()
+  # and 030_rls.sql pins every row to it, so a direct database connection here
+  # would silently bypass row-level security.
+  mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Where the tools read and write. Defaults to the live API origin, so a
+      # plain `docker compose up` works with no .env file at all.
+      POSTGREST_URL: ${MCP_POSTGREST_URL:-https://api.globie.earth}
+      # The two neighbour proxies, backing generate_soundscape and the podcast
+      # tools. Both are optional: unset only disables those tools, which then
+      # explain themselves rather than looking like the whole server is down.
+      STUDIO_URL: ${MCP_STUDIO_URL:-https://studio.globie.earth}
+      PODCAST_URL: ${MCP_PODCAST_URL:-https://podcast.globie.earth}
+      # A raw MCP client that cannot mint a GoTrue JWT sends
+      # `Authorization: Bearer <MCP_BEARER_TOKEN>` and the server exchanges it,
+      # at the edge, for MCP_DEMO_DEVICE_ID — never forwarding the token onward.
+      # Both are optional, and both are documented in infra/.env.example: the
+      # demo token is a shared secret bounded to the one demo device, so the two
+      # mutating tools write only to that device on the live stack. A device-only
+      # client needs neither, because it sends its own X-Device-Id.
+      MCP_BEARER_TOKEN: ${MCP_BEARER_TOKEN:-}
+      MCP_DEMO_DEVICE_ID: ${MCP_DEMO_DEVICE_ID:-}
+      # local (default), bedrock or none. The default runs the self-hosted model
+      # in-process (no account, no cost) and matches the vector(384) column;
+      # bedrock uses Amazon Titan V1 and needs the credentials below plus the
+      # column back at vector(1536). `none` is a valid configuration, not a broken
+      # one: search_forest_knowledge explains itself and every other tool works.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      # Titan V1 needs a region. A self-hosted service off AWS cannot assume an
+      # instance role (decision D2), so the SDK reads these from the environment
+      # exactly as infra/.env.example documents. An instance role remains the
+      # production path once the service moves onto AWS.
+      BEDROCK_REGION: ${BEDROCK_REGION:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Literal-matching origin list, exactly like STUDIO_CORS_ORIGINS — a bare
+      # '*' would never match a real Origin. Only browser MCP clients send an
+      # Origin; non-browser hosts (Alexa+) are unaffected. 8082 is the demo
+      # client's own local origin below, and without it its connect fails as
+      # though the server were down.
+      MCP_CORS_ORIGINS: ${MCP_CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:8082}
+      # The natural-language tool router (POST /route) and the vision pass behind
+      # describe_photo / POST /contribute. Its key stays on the server by design:
+      # the browser host is a static bundle, so the model it routes with can
+      # never live in the page. Unset only makes /route answer 503 and the host
+      # fall back to its own wording — the MCP surface itself is unaffected,
+      # exactly as EMBEDDING_PROVIDER=none only quiets search.
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # Search rerank (MCP plan §16, decision D6): one server-side model pass
+      # reorders the catalog_search candidate pool so the passage read aloud
+      # first is the one that answers the question. Reorder-only — it never adds
+      # a row — and any failure (no key, timeout, malformed reply) falls back to
+      # the cosine order, so it is an enhancement, never a dependency. Unset
+      # keeps the defaults; RERANK_ENABLED=false restores the pre-§16 behaviour.
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      RERANK_POOL: ${RERANK_POOL:-20}
+      RERANK_TIMEOUT_MS: ${RERANK_TIMEOUT_MS:-20000}
+      DEEPSEEK_RERANK_MODEL: ${DEEPSEEK_RERANK_MODEL:-}
+      # The self-hosted speech cascade behind /voice/transcribe and /voice/speak.
+      # The backing Speaches service is NOT part of this repo and has no public
+      # origin, so this is deliberately empty by default: the two voice routes
+      # answer a clear 503 and everything else is untouched (a valid
+      # configuration, not a broken one — the MCP server's README says so). Point
+      # it at your own Speaches instance to turn voice on.
+      SPEECH_URL: ${MCP_SPEECH_URL:-}
+      # Whisper model for the ears. Multilingual base handles the Thai the DNP
+      # data carries; the server installs whatever is named here on first use.
+      SPEECH_STT_MODEL: ${SPEECH_STT_MODEL:-Systran/faster-whisper-base}
+      # Kokoro for the mouth, and the voice it speaks with.
+      SPEECH_TTS_MODEL: ${SPEECH_TTS_MODEL:-speaches-ai/Kokoro-82M-v1.0-ONNX}
+      SPEECH_TTS_VOICE: ${SPEECH_TTS_VOICE:-af_heart}
+      # Object storage for contributed photographs. There is no bundled MinIO
+      # service and no public storage origin, so these are empty by default and
+      # POST /contribute answers a clear 503 — the rest of the MCP surface is
+      # unaffected. Set MINIO_ENDPOINT (plus credentials) to your own
+      # S3-compatible store to enable photo contributions.
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-globie-media}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-}
+    ports:
+      # Loopback-only. Public traffic arrives through an Easypanel domain pointed
+      # at this service on port 8080, over the Compose network — publishing the
+      # port would expose it to the internet.
+      - "127.0.0.1:${MCP_PORT:-8092}:8080"
+
+  # The demo MCP client: a real browser MCP host for the server above, and the
+  # evidence that the Alexa+ runtime hook works from a browser. Decision D1 keeps
+  # it a separate tiny app rather than a route inside the mobile web build, and
+  # decision D2 hosts it on the same stack as the server.
+  #
+  # It has nothing to talk to over the Compose network: the bundle is static, and
+  # the browser it runs in calls the MCP server directly. That makes the public
+  # origin it is served from an MCP CORS origin — a rejection there looks
+  # identical to a dead server, so it has to be on MCP_CORS_ORIGINS.
+  mcp-client:
+    build:
+      context: ./mcp-client
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      # Loopback-only, to preview the built bundle locally. Public traffic
+      # arrives through an Easypanel domain pointed at this service on port 80.
+      - "127.0.0.1:${MCP_CLIENT_PORT:-8082}:80"

@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Python bytecode caches from the MCP scripts
+__pycache__/
+*.pyc
+
+# Regenerable local caches: the transformers.js embedding model
+# (infra/mcp/.cache, ~130 MB incl. a 115 MB quantized onnx). Re-downloaded by the
+# backfill script on first run, so it never belongs in the repo.
+.cache/
+
+.DS_Store
+*.log
+
+# Secrets. The submitted .env.example is the only env file that may be committed.
+.env*
+!.env.example
+
+# Credential material
+*.pem
+*.p12
+*service-account*.json
+*adminsdk*.json

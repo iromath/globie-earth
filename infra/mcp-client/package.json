@@ -1,0 +1,23 @@
+{
+  "name": "globie-mcp-client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A real MCP client for the Globie Earth MCP server: it connects over Streamable HTTP with the official SDK, performs the initialize handshake, then lists and calls whatever the server advertises. This is the runtime hook the Alexa+ track asks for.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite --port=5173 --host=0.0.0.0",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview --port=4173 --host=0.0.0.0",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}
