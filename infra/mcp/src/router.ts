@@ -46,7 +46,7 @@ export function routerHealth(): { configured: boolean; model: string; models: Ro
   return { configured: apiKey !== null, model, models: [...ROUTER_MODELS] };
 }
 
-const SYSTEM_PROMPT = [
+const SYSTEM_PROMPT_BASE = [
   "You route a listener's request to exactly one tool on the Globie Earth MCP server,",
   'a reforestation sanctuary in Isaan, Thailand.',
   'Call exactly one tool, using its exact name, and fill its arguments from the request.',
@@ -73,16 +73,36 @@ const SYSTEM_PROMPT = [
     '"dnp_species", "the wildlife checklist" or "the protected species checklist" means ' +
     '"dnp_wildlife", and "animals seen in a park" or "park animals" means "dnp_fauna".',
   'Never invent a tool name, and never pick a tool the listener did not ask for.',
-  // The attached photo is the whole point of the vision model here. Only the
-  // describe_photo tool can look at an image, and it reads *any* photo - a
-  // plant, a room, a document - so a photo must never be declined for want of
-  // a tool. The image itself is not an argument the model reproduces; the host
-  // fills it into the call from the file the listener attached.
+];
+
+// The attached photo is the whole point of the vision model here. Only the
+// describe_photo tool can look at an image, and it reads *any* photo - a
+// plant, a room, a document - so a photo must never be declined for want of
+// a tool. The image itself is not an argument the model reproduces; the host
+// fills it into the call from the file the listener attached.
+const PHOTO_ATTACHED = [
   'A photo is attached to this request: route it to "describe_photo", passing the',
   'listener\'s question as its question argument. describe_photo reads any photo, not only',
   'trees, so never answer that no tool can see an image.',
-  'If no offered tool can serve the request, answer without calling a tool and say why in one sentence.',
-].join(' ');
+];
+
+// Stated only when no image is attached. The clause above used to be part of the
+// fixed prompt, so a plain text request ("how is the sanctuary doing?") was told
+// a photo *was* attached and got routed to describe_photo, which then had no
+// image to read. Telling the model the truth - no photo here - keeps it off that
+// tool and leaves the decision to the words alone.
+const NO_PHOTO = [
+  'No photo is attached to this request, so never route to "describe_photo": it needs an',
+  'image the listener has not sent. Route the request to the tool that fits the words alone.',
+];
+
+const NO_TOOL_CLAUSE =
+  'If no offered tool can serve the request, answer without calling a tool and say why in one sentence.';
+
+/** The router prompt for this request, with the photo clause stated only when one is attached. */
+function systemPrompt(hasImage: boolean): string {
+  return [...SYSTEM_PROMPT_BASE, ...(hasImage ? PHOTO_ATTACHED : NO_PHOTO), NO_TOOL_CLAUSE].join(' ');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -211,7 +231,7 @@ export function registerRouterRoute(app: FastifyInstance): void {
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: systemPrompt(Boolean(image)) },
             { role: 'user', content: userContent },
           ],
           tools: asFunctionTools(tools),

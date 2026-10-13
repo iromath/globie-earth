@@ -15,6 +15,13 @@ WORKDIR /app
 
 # Manifests first, so `npm ci` stays cached when only source files change.
 COPY package.json package-lock.json ./
+# onnxruntime-node's postinstall otherwise downloads the CUDA execution-provider
+# binaries from NuGet (~1 GB, and extracting them needs a large heap). They are
+# dead weight here: production runs the local embedding model on the bundled CPU
+# runtime only. `skip` keeps the install (and the model warm-up below) CPU-only,
+# and is the difference between a build that fits in the daemon's memory and one
+# that is OOM-killed at `npm ci`.
+ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci
 
 COPY tsconfig.json ./
@@ -38,6 +45,10 @@ ENV NODE_ENV=production
 ENV EMBEDDING_CACHE_DIR=/app/.cache
 
 COPY package.json package-lock.json ./
+# Same CUDA skip as the build stage, for the same reason: this image serves CPU
+# inference only and the GPU binaries are both unused and too large to extract
+# within the build daemon's memory.
+ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist

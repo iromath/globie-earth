@@ -8,7 +8,7 @@
 //
 // Both answer errors as `{ error: string }`, not PostgREST's `{ message }`, so
 // the message is read from that field and raised as-is. The proxies own the
-// Suno and Podcast Index credentials; this server never holds either.
+// Gemini and Podcast Index credentials; this server never holds either.
 
 import type { Caller } from './identity.js';
 

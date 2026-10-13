@@ -20,7 +20,8 @@
     "import:dnp-wildlife": "node --env-file=../.env scripts/import-dnp-wildlife.mjs",
     "enrich:dnp-plants": "node --env-file=../.env scripts/enrich-dnp-plants.mjs",
     "enrich:dnp-media": "node --env-file=../.env scripts/enrich-dnp-media.mjs",
-    "watch:embeddings": "node --env-file=../.env scripts/watch-bedrock.mjs"
+    "watch:embeddings": "node --env-file=../.env scripts/watch-bedrock.mjs",
+    "make:dispatch-token": "node --env-file=../.env scripts/make-dispatch-token.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1146.0",

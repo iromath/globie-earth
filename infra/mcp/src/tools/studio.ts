@@ -1,8 +1,8 @@
 // The soundscape tool: queuing a generated piece through the studio proxy.
 //
-// The proxy holds the Suno key and enforces the daily render quota; this server
-// sees neither. A track renders asynchronously - the proxy polls Suno for up to
-// about twenty minutes - so the tool returns the track id and its status rather
+// The proxy holds the Gemini key and enforces the daily render quota; this server
+// sees neither. A track renders asynchronously - one synchronous provider call
+// that can take minutes - so the tool returns the track id and its status rather
 // than blocking a voice turn on the render.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

@@ -272,6 +272,88 @@ try {
   console.log(
     `        ${podcasts.isError ? 'tool error' : 'result'}: ${podcastsText.replace(/\s+/g, ' ').slice(0, 160)}`,
   );
+
+  // 10. Notifications - the read routes, the SSE stream, and the 4d kill switch
+  //     as /health reports it. Read-only and anonymous: the verifier presents a
+  //     *fresh* device id that owns nothing, so the feed must answer with a real
+  //     empty list rather than an error, and the stream must open - or the switch
+  //     must refuse it - exactly as /health says it will. This is the part of the
+  //     4b integration set that is safe to run against the live deployment.
+  console.log('\n10. notifications');
+  const stranger = globalThis.crypto.randomUUID();
+  const apiUrl = (path, query) => {
+    const url = new URL(URL_STRING);
+    url.pathname = url.pathname.replace(/\/mcp\/?$/, path);
+    url.search = query ?? '';
+    return url;
+  };
+
+  let notifHealth = null;
+  try {
+    const response = await fetch(apiUrl('/health'));
+    if (response.ok) notifHealth = (await response.json())?.notifications ?? null;
+  } catch {
+    notifHealth = null;
+  }
+  check(
+    'health reports the notification switch',
+    typeof notifHealth?.enabled === 'boolean',
+    JSON.stringify(notifHealth),
+  );
+  check('health reports a dispatcher state', notifHealth?.dispatcher !== undefined);
+
+  // The feed for a device that owns nothing: a real empty answer, not an error.
+  const feedResponse = await fetch(apiUrl('/notifications'), {
+    headers: { 'X-Device-Id': stranger },
+  });
+  const feed = feedResponse.ok ? await feedResponse.json() : null;
+  check('feed answers for a stranger', feedResponse.status === 200, `status=${feedResponse.status}`);
+  check(
+    'a stranger owns no alerts',
+    Array.isArray(feed?.notifications) && feed.notifications.length === 0,
+    `count=${Array.isArray(feed?.notifications) ? feed.notifications.length : 'n/a'}`,
+  );
+  check('the feed lends the client a clock', typeof feed?.now === 'string');
+
+  // `since` is the stream's cursor; a future one must paginate to nothing, and a
+  // junk one must be refused before it reaches Postgres.
+  const sinceResponse = await fetch(apiUrl('/notifications', '?since=2099-01-01T00:00:00.000Z'), {
+    headers: { 'X-Device-Id': stranger },
+  });
+  check('since paginates the feed', sinceResponse.status === 200, `status=${sinceResponse.status}`);
+  const badSince = await fetch(apiUrl('/notifications', '?since=not-a-date'), {
+    headers: { 'X-Device-Id': stranger },
+  });
+  check('a junk cursor is refused', badSince.status === 400, `status=${badSince.status}`);
+
+  // The stream itself. /health says whether delivery is on; the stream must
+  // agree - 200 + text/event-stream when on, 503 when the switch is off.
+  const streamAbort = new AbortController();
+  const streamResponse = await fetch(apiUrl('/notifications/stream'), {
+    headers: { 'X-Device-Id': stranger },
+    signal: streamAbort.signal,
+  });
+  if (streamResponse.status === 200) {
+    const reader = streamResponse.body.getReader();
+    const { value } = await reader.read();
+    const preamble = value ? new TextDecoder().decode(value) : '';
+    streamAbort.abort();
+    check(
+      'stream opens as event-stream',
+      /text\/event-stream/.test(streamResponse.headers.get('content-type') ?? ''),
+      streamResponse.headers.get('content-type'),
+    );
+    check(
+      'stream flushes a retry/open preamble',
+      /retry:|: open/.test(preamble),
+      preamble.replace(/\s+/g, ' ').slice(0, 60),
+    );
+    check('stream is up while delivery is on', notifHealth?.enabled !== false);
+  } else {
+    streamAbort.abort();
+    check('stream refused with 503 while delivery is off', streamResponse.status === 503,
+      `status=${streamResponse.status}`);
+  }
 } catch (error) {
   failures += 1;
   console.error(`\nverification threw: ${error instanceof Error ? error.message : String(error)}`);

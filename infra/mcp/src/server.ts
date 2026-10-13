@@ -28,7 +28,9 @@ import { contributeHealth, registerContributeRoute } from './contribute.js';
 import { getEmbeddingProvider } from './embed.js';
 import { resolveCaller, type Caller } from './identity.js';
 import { registerModerateRoute } from './moderate.js';
+import { notificationsHealth, registerNotificationsRoutes } from './notifications.js';
 import { registerForestPrompts } from './prompts/forest.js';
+import { pushDispatcherHealth, startPushDispatcher } from './pushDispatcher.js';
 import { registerCatalogResources } from './resources/catalog.js';
 import { registerDeedResources } from './resources/deeds.js';
 import { registerRouterRoute, routerHealth } from './router.js';
@@ -146,6 +148,12 @@ app.get('/health', () => {
     // Photo contributions: the vision scan and the object store must both be
     // set for the route to accept anything, so they are reported together.
     contribute: contributeHealth(),
+    // The live notification surface beside /mcp. `enabled` is the 4d kill
+    // switch (NOTIFICATIONS_ENABLED): off refuses the stream and stops push
+    // while the writer keeps recording rows. `stream`/`push` report the pieces;
+    // `dispatcher` is the always-on loop that actually sends those pushes (2d),
+    // so it is the one that says whether a closed app *is* being woken.
+    notifications: { ...notificationsHealth(), dispatcher: pushDispatcherHealth() },
     // A distinction worth keeping: the server can be up while the API it reads
     // is not configured. The container itself refuses to start without it.
     postgrest: { configured: Boolean(process.env.POSTGREST_URL?.trim()) },
@@ -320,10 +328,24 @@ async function main(): Promise<void> {
   // api.moderators through RLS, not by this process.
   registerModerateRoute(app);
 
+  // The live notification surface: the SSE stream an open app listens on, plus
+  // its polling fallback and read receipt. It sits beside /mcp for the same
+  // reason - the identity check happens once - and it reads the caller's own
+  // alerts through the SECURITY DEFINER RPCs, so the stream can only ever carry
+  // the caller's feed.
+  registerNotificationsRoutes(app);
+
   // Species enrichment. It sits beside /mcp so the app's species page can read
   // the same Wikipedia lead the describe_species tool answers with, without the
   // page holding any credential - the house reason for every side-route here.
   registerWikiRoute(app);
+
+  // The push dispatcher: the always-on loop that claims un-delivered alerts for
+  // every device and hands them to the OneSignal sender - the caller pushSender
+  // never had. Unlike the routes above it serves nothing, so it is started
+  // rather than registered; it declines to run (and says so) until a dispatch
+  // token and the OneSignal pair are configured. See pushDispatcher.ts.
+  startPushDispatcher(app);
 
   await app.listen({ port: PORT, host: HOST });
   app.log.info({ protocolVersion: REQUIRED_PROTOCOL_VERSION }, 'mcp: listening on /mcp');

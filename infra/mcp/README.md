@@ -28,7 +28,7 @@ rest are read-only:
 
 | Tool | What it does | Backend |
 | --- | --- | --- |
-| `search_forest_knowledge` | Search across species, sites and guardian lore. Semantic when a provider is configured, keyword otherwise. | Self-hosted multilingual-e5-small by default (Amazon Titan V1 optional) → `catalog_search` RPC; keyword fallback reads the catalogue tables |
+| `search_forest_knowledge` | Search across species, sites and guardian lore, together with the four Thai DNP reference datasets (biodiversity survey, plant checklist, park fauna observations, wildlife checklist). Semantic when a provider is configured, keyword otherwise. | Self-hosted multilingual-e5-small by default (Amazon Titan V1 optional) → `catalog_search` RPC; keyword fallback reads the catalogue and `dnp_*` tables |
 | `recommend_species` | Recommends species from the caller's own past adoptions. | `recommend_species` RPC |
 | `get_sanctuary_conditions` | Ambient CO₂, European AQI, humidity and air temperature at the sanctuary. | Open-Meteo (keyless, modelled fields) |
 | `describe_photo` | Describes an attached photo — a plant, landscape, object, room or document. | DeepSeek `deepseek-v4-flash-vision-exp` (not the catalogue) |
@@ -64,7 +64,7 @@ explanation rather than an empty record when the name matches nothing.
 render quota, which the studio proxy enforces. Rendering is asynchronous — the
 tool returns a track id and a status of `queued`, never a finished recording, so
 it must never be reported as produced. The studio and podcast proxies hold the
-Suno and Podcast Index credentials; this server holds neither.
+Gemini and Podcast Index credentials; this server holds neither.
 
 ## Resources
 
@@ -78,9 +78,22 @@ with `new URL()` before dispatch, so it must be absolute).
 | `globie://guardian/{id}` | One guardian's lore, by id. |
 | `globie://site/{id}` | One stop on the trail, by numeric id. |
 | `globie://me/deeds` | This caller's Living Deeds — the read-only mirror of `get_my_deeds`. |
+| `globie://dnp/{id}` | One surveyed species record from the DNP biodiversity survey, by numeric id. |
+| `globie://dnp-plant/{id}` | One species from the DNP national plant checklist, by numeric id. |
+| `globie://dnp-fauna/{id}` | One fauna record from the DNP national-park fauna observations, by numeric id. |
+| `globie://dnp-wildlife/{id}` | One species from the DNP national wildlife checklist, by numeric id. |
 
 The three catalogue templates are world-readable; `globie://me/deeds` is
 device-scoped by row-level security, exactly like the tool it mirrors.
+
+The four `globie://dnp-*` templates read the same external reference datasets as
+`search_forest_knowledge` — Thai Department of National Parks open data under the
+Open Data Common licence, **not** part of the adoptable Globie catalogue. They
+are addressed by numeric id only and are registered with `{ list: undefined }`,
+so they are **not** enumerated by `resources/list` (the datasets run to tens of
+thousands of rows, and the SDK skips any template without a `list` callback).
+They still appear in `resources/templates/list` and still resolve on
+`resources/read`; discover them by id through `search_forest_knowledge`.
 
 ## Prompts
 

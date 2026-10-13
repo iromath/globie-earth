@@ -24,7 +24,7 @@ const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 
 /**
  * The Ancestral Creek, site 2 in the catalogue (the catalog seed) and
- * the first parseable gps_coords in src/data/mockData.ts - the same coordinate
+ * the first parseable gps_coords in src/data/content.ts - the same coordinate
  * src/lib/openMeteo.ts resolves at runtime. Hardcoded here because this service
  * has no access to the app's frontend data module; keep the two in step.
  */
