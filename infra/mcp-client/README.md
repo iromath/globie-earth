@@ -129,6 +129,26 @@ what came back — and it exports as JSON. Copy or download it to show that the
 tools were really called at runtime. It is a client-side log, not a packet
 capture, and it is labelled as such.
 
+## Tool forms
+
+Each tool's form is built from the JSON Schema the server returns in
+`tools/list`, so nothing about the surface is hard-coded. Field types map to
+controls like this:
+
+| Schema type | Control |
+| --- | --- |
+| `string` | text input |
+| `integer` / `number` | number input |
+| `boolean` | checkbox |
+| `enum` | dropdown |
+| `array` / `object` | text input (enter JSON) |
+
+`array` and `object` fields (used by the Openmind.Travel trip-planning tools
+`om_plan_trip`, `om_save_trip_idea` and `om_save_itinerary`) accept a JSON
+literal — e.g. `["Bangkok", "Chiang Mai"]` for an array, or
+`{"destination": "Bangkok"}` for an object. The value is parsed before the call
+goes out; a malformed literal is dropped rather than sent as a string.
+
 ## What this is not
 
 - The demo bearer token is exchanged at the MCP edge for a device identity. It is

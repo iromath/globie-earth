@@ -512,6 +512,18 @@ function collectArgs(
     } else if (field.kind === 'number') {
       const value = Number(raw);
       if (!Number.isNaN(value)) args[field.name] = value;
+    } else if (field.kind === 'array' || field.kind === 'object') {
+      // Array and object fields are entered as JSON text. A malformed value
+      // is dropped rather than sent as a string (which the server's schema
+      // would reject), so the caller sees a clean "missing argument" error.
+      try {
+        const parsed = JSON.parse(raw);
+        if ((field.kind === 'array' && Array.isArray(parsed)) || (field.kind === 'object' && !Array.isArray(parsed))) {
+          args[field.name] = parsed;
+        }
+      } catch {
+        // Drop: the value was not valid JSON of the expected shape.
+      }
     } else {
       args[field.name] = raw;
     }

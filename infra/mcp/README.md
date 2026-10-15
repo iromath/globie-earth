@@ -120,6 +120,12 @@ The impact data (causes, treasures, stories) is served from static data baked
 into the server (`src/openmind/impactData.ts`); `om_get_impact_travel_options`
 is the one impact tool that hits the live tours/projects API.
 
+The browser MCP client (`infra/mcp-client/`) renders all 51 tools from
+`tools/list` with no hard-coded list. Three trip-planning tools
+(`om_plan_trip`, `om_save_trip_idea`, `om_save_itinerary`) take `array` or
+`object` arguments; the client's form builder accepts those as JSON literals
+(e.g. `["Bangkok", "Chiang Mai"]`) and parses them before the call goes out.
+
 ## Resources
 
 The same catalogue and deed data, addressed by URI for hosts that prefer to read

@@ -72,8 +72,9 @@ export function routerHealth(): { configured: boolean; model: string; models: Ro
 }
 
 const SYSTEM_PROMPT_BASE = [
-  "You route a listener's request to exactly one tool on the Globie Earth MCP server,",
-  'a reforestation sanctuary in Isaan, Thailand.',
+  "You route a listener's request to exactly one tool on the Globie Earth MCP server.",
+  'Globie Earth is a reforestation sanctuary in Isaan, Thailand, and also offers a travel ' +
+    'catalogue (the om_* tools: tours, destinations, flights, guides, trip planning).',
   'Call exactly one tool, using its exact name, and fill its arguments from the request.',
   "When the request is a free-text question, pass the question through as the tool's query argument.",
   // A search takes an optional entity_type filter, and a model reaches for it

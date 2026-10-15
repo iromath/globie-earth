@@ -61,7 +61,7 @@ export interface ConnectOptions {
 /** A form field derived from one property of a tool's input schema. */
 export interface ToolField {
   name: string;
-  kind: 'string' | 'number' | 'integer' | 'boolean' | 'enum';
+  kind: 'string' | 'number' | 'integer' | 'boolean' | 'enum' | 'array' | 'object';
   required: boolean;
   description: string;
   options?: string[];
@@ -85,6 +85,10 @@ interface JsonSchemaProperty {
  * Flattens a tool's input schema into the fields the UI draws. Unknown shapes
  * fall back to a plain string input rather than being dropped, so a schema this
  * page has not seen still gets a chance to be called.
+ *
+ * `array` and `object` fields render as a plain text input too, but the caller
+ * is expected to type JSON (e.g. `["Bangkok", "Chiang Mai"]`); collectArgs() in
+ * main.ts parses those back into structured values before the call goes out.
  */
 export function toolFields(tool: Tool): ToolField[] {
   const schema = (tool.inputSchema ?? {}) as JsonSchemaObject;
@@ -99,6 +103,8 @@ export function toolFields(tool: Tool): ToolField[] {
     else if (kinds.includes('integer')) kind = 'integer';
     else if (kinds.includes('number')) kind = 'number';
     else if (kinds.includes('boolean')) kind = 'boolean';
+    else if (kinds.includes('array')) kind = 'array';
+    else if (kinds.includes('object')) kind = 'object';
     else kind = 'string';
 
     const declaredDefault = property.default;
@@ -109,11 +115,20 @@ export function toolFields(tool: Tool): ToolField[] {
         ? declaredDefault
         : undefined;
 
+    // For structured fields, surface the expected JSON shape in the note so a
+    // caller typing into the box knows what to write.
+    const description =
+      property.description ?? '';
+    const structuredNote =
+      kind === 'array' || kind === 'object'
+        ? `${description}${description ? ' ' : ''}Enter as JSON${kind === 'array' ? ' array' : ' object'}.`
+        : description;
+
     return {
       name,
       kind,
       required: required.has(name),
-      description: property.description ?? '',
+      description: structuredNote,
       options,
       defaultValue,
     };
