@@ -142,12 +142,21 @@ controls like this:
 | `boolean` | checkbox |
 | `enum` | dropdown |
 | `array` / `object` | text input (enter JSON) |
+| `string` naming a photo | file picker (or paste a URL) |
 
 `array` and `object` fields (used by the Openmind.Travel trip-planning tools
 `om_plan_trip`, `om_save_trip_idea` and `om_save_itinerary`) accept a JSON
 literal — e.g. `["Bangkok", "Chiang Mai"]` for an array, or
 `{"destination": "Bangkok"}` for an object. The value is parsed before the call
 goes out; a malformed literal is dropped rather than sent as a string.
+
+A photo field is a `string` whose argument is named `image` or whose description
+mentions a `data:image/…` URL — today that is `describe_photo`. Nobody can type a
+base64 data URL by hand, so the field shows a file picker instead: the chosen
+photo is downscaled to a 1024-px edge as JPEG in the browser and the resulting
+data URL is what the tool receives. A text box stays beside it for a photo that
+already has a public http(s) URL. As with every other field, this is read from
+the schema rather than from a list of tool names.
 
 ## What this is not
 

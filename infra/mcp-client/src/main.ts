@@ -433,6 +433,15 @@ function renderTool(tool: Tool): HTMLElement {
   return card;
 }
 
+/**
+ * True when a field carries a photo. The server names that argument `image` and
+ * its description says it takes a `data:image/…` URL; either is enough, so this
+ * stays a reading of the schema rather than a list of tool names.
+ */
+function isImageField(field: ToolField): boolean {
+  return field.kind === 'string' && (field.name === 'image' || field.description.includes('data:image/'));
+}
+
 function renderField(
   field: ToolField,
   inputs: Map<string, HTMLInputElement | HTMLSelectElement>,
@@ -441,6 +450,61 @@ function renderField(
   const caption = document.createElement('span');
   caption.textContent = field.name + (field.required ? ' *' : '');
   label.append(caption);
+
+  // A photo is the one argument nobody can type: the server wants a
+  // `data:image/…;base64,…` URL, which no listener can produce by hand. So this
+  // field offers a file picker instead — the chosen photo is downscaled here by
+  // readImageFile() and its data URL is what the tool receives. A URL box stays
+  // for a photo that already has a public link. The value actually sent lives in
+  // a hidden carrier, which is the control collectArgs() reads by field name.
+  if (isImageField(field)) {
+    const carrier = document.createElement('input');
+    carrier.type = 'hidden';
+
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'image/*';
+
+    const url = document.createElement('input');
+    url.type = 'text';
+    url.placeholder = 'or paste a public image URL';
+
+    const status = document.createElement('span');
+    status.className = 'arg-note';
+    status.textContent = 'Choose a photo — it is downscaled and attached automatically.';
+
+    picker.addEventListener('change', () => {
+      const file = picker.files?.[0];
+      if (!file) {
+        carrier.value = '';
+        return;
+      }
+      status.textContent = 'Preparing the photo…';
+      readImageFile(file)
+        .then((dataUrl) => {
+          carrier.value = dataUrl;
+          url.value = '';
+          status.textContent = `${file.name} attached — downscaled and sent as a data URL.`;
+        })
+        .catch((error: unknown) => {
+          carrier.value = '';
+          picker.value = '';
+          status.textContent = errorMessage(error);
+        });
+    });
+
+    url.addEventListener('input', () => {
+      carrier.value = url.value.trim();
+      if (carrier.value) {
+        picker.value = '';
+        status.textContent = 'Using the pasted image URL.';
+      }
+    });
+
+    label.append(picker, url, status, carrier);
+    inputs.set(field.name, carrier);
+    return label;
+  }
 
   let control: HTMLInputElement | HTMLSelectElement;
   if (field.kind === 'enum' && field.options) {
