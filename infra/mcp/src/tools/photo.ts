@@ -9,7 +9,8 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { deepseekConfig, isImageInput, VISION_MODEL } from '../deepseek.js';
+import { chat, isImageInput, LlmError, providerConfigured, visionTarget } from '../llm.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 /** How long the vision model may take before the tool gives up. */
@@ -33,10 +34,9 @@ export function registerPhotoTools(server: McpServer): void {
     {
       title: 'Describe a photo',
       description:
-        'Looks at a photo the listener attached and describes what is in it. Use this for any ' +
-        'photo, not only trees: a plant, a landscape, an object, a room, a document - whatever ' +
-        'the listener asks about. The description comes from the vision model reading the image, ' +
-        'not from the sanctuary catalogue, so say that when you report it. Read-only.',
+        'Looks at a photo the listener attached and describes what is in it, using the vision ' +
+        'model. Use this for any photo, not only trees: a plant, a landscape, an object, a room, ' +
+        'a document - whatever the listener asks about. Read-only.',
       inputSchema: {
         image: z
           .string()
@@ -52,14 +52,19 @@ export function registerPhotoTools(server: McpServer): void {
           .describe('What to ask about the photo. Defaults to a full description.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('describe_photo') } },
     },
     async ({ image, question }) => {
       try {
-        const { baseUrl, apiKey } = deepseekConfig();
-        if (!apiKey) {
+        const { provider, model } = visionTarget();
+        if (!providerConfigured(provider)) {
           return errorResult(
-            'The photo tool is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
-              'DEEPSEEK_BASE_URL) in the MCP server environment.',
+            provider === 'nova'
+              ? 'The photo tool is not configured for Nova. Set the Bedrock credentials ' +
+                '(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS_BEARER_TOKEN_BEDROCK ' +
+                'API key, and BEDROCK_REGION or AWS_REGION) in the MCP server environment.'
+              : 'The photo tool is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
+                'DEEPSEEK_BASE_URL) in the MCP server environment.',
           );
         }
         if (!isImageInput(image)) {
@@ -70,68 +75,52 @@ export function registerPhotoTools(server: McpServer): void {
         }
 
         const asked = question?.trim() || DEFAULT_QUESTION;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-        let upstream: Response;
+        let result;
         try {
-          upstream = await fetch(`${baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-              model: VISION_MODEL,
-              messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                {
-                  role: 'user',
-                  content: [
-                    { type: 'text', text: asked },
-                    { type: 'image_url', image_url: { url: image } },
-                  ],
-                },
+          result = await chat({
+            provider,
+            model,
+            request: {
+              system: SYSTEM_PROMPT,
+              parts: [
+                { type: 'text', text: asked },
+                { type: 'image', url: image },
               ],
               temperature: 0,
-            }),
-            signal: controller.signal,
+            },
+            timeoutMs: TIMEOUT_MS,
           });
-        } catch {
-          // The fetch rejected because the controller fired or the host was
-          // unreachable; either way nothing was read, and the message says so.
-          return errorResult(
-            controller.signal.aborted
-              ? `The photo tool timed out after ${TIMEOUT_MS} ms.`
-              : `The photo tool could not reach ${baseUrl}.`,
-          );
-        } finally {
-          clearTimeout(timer);
+        } catch (error) {
+          if (!(error instanceof LlmError)) throw error;
+          // Nothing was read; the message says which of the ways it failed.
+          if (error.kind === 'timeout') {
+            return errorResult(`The photo tool timed out after ${TIMEOUT_MS} ms.`);
+          }
+          if (error.kind === 'upstream') {
+            return errorResult(
+              `The vision model endpoint returned ${error.status}. ${error.detail}`.trim(),
+            );
+          }
+          return errorResult('The photo tool could not reach its vision model endpoint.');
         }
 
-        if (!upstream.ok) {
-          const detail = await upstream.text().catch(() => '');
-          return errorResult(
-            `The vision model endpoint returned ${upstream.status}. ${detail.slice(0, 300)}`.trim(),
-          );
-        }
-
-        const payload = (await upstream.json().catch(() => null)) as
-          | { choices?: { message?: { content?: unknown } }[] }
-          | null;
-        const content = payload?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string' || !content.trim()) {
-          return errorResult('The vision model returned no description.');
-        }
-
-        const description = content.trim();
+        const description = result.text.trim();
         const spoken = `Looking at the photo: ${description} That is the vision model's reading of the image, not the sanctuary catalogue.`;
         return jsonResult(
           {
             question: asked,
             description,
-            model: VISION_MODEL,
+            model: result.model,
             // Said plainly: this is the model's reading of the image, not a fact
             // from the sanctuary's own catalogue.
-            source: `${VISION_MODEL} reading the attached photo (not the sanctuary catalogue)`,
+            source: `${result.model} reading the attached photo (not the sanctuary catalogue)`,
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('describe_photo'),
+            invoking: 'Looking at the photo…',
+            invoked: 'Photo description',
+          },
         );
       } catch (error) {
         return errorResult(error);

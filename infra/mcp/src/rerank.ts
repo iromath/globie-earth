@@ -9,17 +9,18 @@
 // pool - the answer's first line is the wrong passage, not a missing one.
 //
 // This module adds one narrow, optional step - a cross-encoder-style listwise
-// rerank over the candidate pool - on the same server-side DeepSeek key the
-// router and the vision tool already use. It never invents content: it only
-// *reorders* the rows the database returned, so a rerank can improve the answer
-// but can never fabricate one (the honesty house rule, plan §1.1).
+// rerank over the candidate pool - on the same server-side model key the router
+// and the vision tool already use (llm.ts; DeepSeek by default, Amazon Bedrock
+// Nova when RERANK_PROVIDER=nova). It never invents content: it only *reorders*
+// the rows the database returned, so a rerank can improve the answer but can
+// never fabricate one (the honesty house rule, plan §1.1).
 //
 // Any failure - no key, timeout, non-200, malformed JSON, or an `order` that is
 // not a usable permutation - returns null, and the caller keeps the cosine
 // order. That is the same graceful-degradation rule the embedding provider
 // follows (EMBEDDING_PROVIDER=none stays a valid configuration).
 
-import { deepseekConfig } from './deepseek.js';
+import { chat, providerConfigured, rerankTarget } from './llm.js';
 
 // How long the rerank model may take before the search falls back to cosine.
 // 20s matches the router's TIMEOUT_MS: a live production call from the VPS to
@@ -30,6 +31,18 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 /** How many candidate rows are fetched before reranking, unless overridden. */
 const DEFAULT_POOL = 20;
+
+/**
+ * The default latency *ceiling* for a whole search, in milliseconds. 0 = no
+ * ceiling, so the rerank runs whenever it is enabled (the web client's case).
+ * The Alexa+ platform requires a round-trip of **under 500 ms** (plan §20.3 gap
+ * 4), which the remote rerank - measured at ~21 s end-to-end on 2026-10-15, the
+ * 20 s timeout expiring and falling back to cosine - cannot possibly meet. An
+ * Alexa-facing deployment therefore sets SEARCH_LATENCY_BUDGET_MS, and any
+ * rerank whose own cap does not fit inside that ceiling is skipped outright, so
+ * the answer comes from the in-process local-embed path instead.
+ */
+const DEFAULT_BUDGET_MS = 0;
 
 /** Per-candidate content shown to the model; long passages are truncated. */
 const MAX_CONTENT_CHARS = 400;
@@ -48,13 +61,19 @@ export interface RerankOutcome {
   model: string;
 }
 
-/** Whether the stage is on, and the pool/timeout it runs with. Read per call. */
-export function rerankConfig(): { enabled: boolean; pool: number; timeoutMs: number } {
+/** Whether the stage is on, and the pool/timeout/budget it runs with. Read per call. */
+export function rerankConfig(): {
+  enabled: boolean;
+  pool: number;
+  timeoutMs: number;
+  budgetMs: number;
+} {
   const flag = (process.env.RERANK_ENABLED ?? 'true').trim().toLowerCase();
   return {
     enabled: !['false', '0', 'no', 'off'].includes(flag),
     pool: positiveInt(process.env.RERANK_POOL, DEFAULT_POOL, 2),
     timeoutMs: positiveInt(process.env.RERANK_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1),
+    budgetMs: positiveInt(process.env.SEARCH_LATENCY_BUDGET_MS, DEFAULT_BUDGET_MS, 0),
   };
 }
 
@@ -140,40 +159,34 @@ export async function rerankHits(
   query: string,
   hits: RankableHit[],
 ): Promise<RerankOutcome | null> {
-  const { enabled, timeoutMs } = rerankConfig();
-  const { baseUrl, model: defaultModel, apiKey } = deepseekConfig();
-  if (!enabled || !apiKey || hits.length < 2) return null;
+  const { enabled, timeoutMs, budgetMs } = rerankConfig();
+  const { provider, model } = rerankTarget();
+  if (!enabled || !providerConfigured(provider) || hits.length < 2) return null;
 
-  const model = process.env.DEEPSEEK_RERANK_MODEL?.trim() || defaultModel;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Fast-path for a latency-bounded caller (the Alexa+ round-trip budget, plan
+  // §20.3 gap 4 / §21 Phase 3). The rerank is a remote model call whose hard cap
+  // is `timeoutMs`, so if that cap does not fit inside the caller's ceiling the
+  // stage cannot be allowed to run at all: skipping it here returns the
+  // in-process cosine order immediately, instead of burning the whole ceiling
+  // and falling back anyway (the ~21 s worst case reproduced live on
+  // 2026-10-15). A RERANK_TIMEOUT_MS at or below the budget re-enables it.
+  if (budgetMs > 0 && timeoutMs > budgetMs) return null;
+
   try {
-    const upstream = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
+    const result = await chat({
+      provider,
+      model,
+      request: {
+        system: SYSTEM_PROMPT,
+        parts: [{ type: 'text', text: userMessage(query, hits) }],
         temperature: 0,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage(query, hits) },
-        ],
-      }),
-      signal: controller.signal,
+      },
+      timeoutMs,
     });
 
-    if (!upstream.ok) return null;
-    const payload = (await upstream.json().catch(() => null)) as
-      | { choices?: { message?: unknown }[] }
-      | null;
-    const message = payload?.choices?.[0]?.message;
-    if (!isRecord(message) || typeof message.content !== 'string') return null;
-
-    const order = parseOrder(message.content, hits.length);
-    return order ? { order, model } : null;
+    const order = parseOrder(result.text, hits.length);
+    return order ? { order, model: result.model } : null;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }

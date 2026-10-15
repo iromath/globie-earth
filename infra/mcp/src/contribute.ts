@@ -43,7 +43,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
-import { deepseekConfig, VISION_MODEL } from './deepseek.js';
+import { chat, LlmError, providerConfigured, visionTarget, type LlmPart, type LlmProvider } from './llm.js';
 import { resolveCaller } from './identity.js';
 import { deletePhoto, keyForUrl, minioConfig, minioHealth, putPhoto } from './minio.js';
 import { del, get, insert, PostgrestError } from './postgrest.js';
@@ -97,9 +97,9 @@ type Organ = (typeof ORGANS)[number];
 
 /** Whether the route can serve, and where it stores - for /health. */
 export function contributeHealth(): { configured: boolean; model: string; storage: ReturnType<typeof minioHealth> } {
-  const { apiKey } = deepseekConfig();
+  const { provider, model } = visionTarget();
   const storage = minioHealth();
-  return { configured: apiKey !== null && storage.configured, model: VISION_MODEL, storage };
+  return { configured: providerConfigured(provider) && storage.configured, model, storage };
 }
 
 /** The identity verdict, which replaces 220's bare `relevant` boolean. */
@@ -371,65 +371,53 @@ function speciesDossier(value: unknown): string {
  * each of its sampled frames, so the model reads them as one file rather than
  * several. Returns the raw reply text, or throws on a bad call.
  */
-async function scanPhotos(media: IncomingMedia[], subjectLine: string): Promise<string> {
-  const { baseUrl, apiKey } = deepseekConfig();
-  if (!apiKey) throw new Error('unconfigured');
-
-  const content: Record<string, unknown>[] = [{ type: 'text', text: subjectLine }];
+async function scanPhotos(
+  media: IncomingMedia[],
+  subjectLine: string,
+  provider: LlmProvider,
+  model: string,
+): Promise<string> {
+  const parts: LlmPart[] = [{ type: 'text', text: subjectLine }];
   media.forEach((item, index) => {
     const kind = item.mediaType === 'video' ? 'a short video' : 'a photo';
-    content.push({
+    parts.push({
       type: 'text',
       text: `Media ${index + 1} of ${media.length} - ${kind} - organ: ${item.organ}`,
     });
     item.scanImages.forEach((url, frameIndex) => {
       if (item.scanImages.length > 1) {
-        content.push({
+        parts.push({
           type: 'text',
           text: `Frame ${frameIndex + 1} of ${item.scanImages.length} sampled from this video`,
         });
       }
-      content.push({ type: 'image_url', image_url: { url } });
+      parts.push({ type: 'image', url });
     });
   });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  let upstream: Response;
   try {
-    upstream = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content },
-        ],
-        // The reply is required to be a JSON object; the endpoint honours this
-        // flag and it is what makes the parse below reliable rather than lucky.
-        response_format: { type: 'json_object' },
+    // The reply is required to be a JSON object; `json` sets response_format on
+    // the DeepSeek path, which is what makes the parse below reliable rather
+    // than lucky. The call site maps the failure kind back to its own wording.
+    const result = await chat({
+      provider,
+      model,
+      request: {
+        system: SYSTEM_PROMPT,
+        parts,
+        json: true,
         temperature: 0,
-      }),
-      signal: controller.signal,
+      },
+      timeoutMs: TIMEOUT_MS,
     });
-  } catch {
-    throw new Error(controller.signal.aborted ? 'timeout' : 'unreachable');
-  } finally {
-    clearTimeout(timer);
+    return result.text;
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    if (error.kind === 'upstream') {
+      throw new Error(`upstream ${error.status}: ${error.detail}`.trim());
+    }
+    throw new Error(error.kind);
   }
-
-  if (!upstream.ok) {
-    const detail = await upstream.text().catch(() => '');
-    throw new Error(`upstream ${upstream.status}: ${detail.slice(0, 200)}`.trim());
-  }
-
-  const payload = (await upstream.json().catch(() => null)) as
-    | { choices?: { message?: { content?: unknown } }[] }
-    | null;
-  const replyContent = payload?.choices?.[0]?.message?.content;
-  if (typeof replyContent !== 'string' || !replyContent.trim()) throw new Error('empty');
-  return replyContent;
 }
 
 /** The uuid shape a contribution id must have, in a path as in a body. */
@@ -500,7 +488,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
     }
     const speciesId = Number(body.speciesId);
     if (!Number.isInteger(speciesId) || speciesId <= 0) {
-      return reply.code(400).send({ error: 'speciesId must be the DNP row id (a positive integer).' });
+      return reply.code(400).send({ error: 'speciesId must be the dataset row id (a positive integer).' });
     }
     const speciesName = typeof body.speciesName === 'string' ? body.speciesName.trim().slice(0, 200) : '';
 
@@ -603,12 +591,17 @@ export function registerContributeRoute(app: FastifyInstance): void {
       });
     }
 
-    const { apiKey } = deepseekConfig();
-    if (!apiKey) {
+    const { provider, model } = visionTarget();
+    if (!providerConfigured(provider)) {
       return reply.code(503).send({
         error:
-          'Photo contributions are not configured. Set DEEPSEEK_API_KEY in the MCP server ' +
-          'environment so the vision scan can run.',
+          provider === 'nova'
+            ? 'Photo contributions are not configured for Nova. Set the Bedrock credentials ' +
+              '(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS_BEARER_TOKEN_BEDROCK ' +
+              'API key, and BEDROCK_REGION or AWS_REGION) in the MCP server environment so ' +
+              'the vision scan can run.'
+            : 'Photo contributions are not configured. Set DEEPSEEK_API_KEY in the MCP server ' +
+              'environment so the vision scan can run.',
       });
     }
     if (!minioConfig()) {
@@ -632,7 +625,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
 
     let raw: string;
     try {
-      raw = await scanPhotos(media, subjectLine);
+      raw = await scanPhotos(media, subjectLine, provider, model);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       request.log.error({ err: error }, 'contribute: vision scan failed');
@@ -704,7 +697,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
         reason:
           scan.reason ||
           'This image was flagged as harmful or inappropriate. Please contribute a clear photo of the species only.',
-        model: VISION_MODEL,
+        model,
       });
     }
 
@@ -723,7 +716,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
         reason:
           scan.reason ||
           'This photo does not look like the species on this page. Try a close, well-lit photo of the plant or animal itself.',
-        model: VISION_MODEL,
+        model,
       });
     }
 
@@ -743,7 +736,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
         reason:
           scan.reason ||
           'Globie cannot confirm this from the upload yet. A clearer photo of another part of the plant or animal will help.',
-        model: VISION_MODEL,
+        model,
         attempt,
       });
     }
@@ -831,7 +824,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
           ai_category: scan.category,
           ai_subject: keptSubjects.join('; ') || scan.subject || null,
           ai_reason: scan.reason || null,
-          ai_model: VISION_MODEL,
+          ai_model: model,
           ai_verdict: acceptedVerdict,
           ai_confidence: scan.confidence,
         },
@@ -847,7 +840,7 @@ export function registerContributeRoute(app: FastifyInstance): void {
         organs: stored.map((photo) => photo.organ),
         subject: keptSubjects.join('; ') || scan.subject,
         reason: scan.reason,
-        model: VISION_MODEL,
+        model,
         pending: true,
       });
     } catch (error) {

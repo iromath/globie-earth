@@ -100,7 +100,37 @@ const SOURCE_SQL = {
       'onep_2548', onep_2548, 'onep_2560', onep_2560, 'onep_2565', onep_2565,
       'iucn_status', iucn_status, 'cites_status', cites_status, 'seasonal_status', seasonal_status
     ) order by id), '[]'::json) from api.dnp_wildlife;`,
+
+  // The project's own cookbook (254_cookbook.sql, imported by import-cookbook.mjs):
+  // one row per Thai dish, with the English name first so an English query lands
+  // on it, plus the romanised and Thai names, the region and category, and the
+  // whole ingredient list and method so a cooking question reaches the recipe.
+  recipe: `select coalesce(json_agg(json_build_object(
+      'id', id, 'slug', slug, 'name_en', name_en, 'name_local', name_local, 'name_thai', name_thai,
+      'region', region, 'category', category, 'servings', servings, 'total_minutes', total_minutes,
+      'description', description, 'ingredients', ingredients, 'steps', steps, 'tips', tips
+    ) order by id), '[]'::json) from api.cookbook_recipes;`,
 };
+
+/**
+ * The numbered method of one dish as a single string: "Method: 1. … 2. …", each
+ * step carrying the book's own time where it gave one. `steps` is jsonb, so a
+ * step arrives as { step, detail, minutes } - and `minutes` may be a number or a
+ * range the book wrote as a string ("20-25"). Empty where the book printed none.
+ */
+function recipeMethod(steps) {
+  const list = (steps ?? []).filter((step) => step && step.detail);
+  if (!list.length) return '';
+  const rendered = list.map((step, index) => {
+    const number = step.step ?? index + 1;
+    const minutes =
+      step.minutes === null || step.minutes === undefined || step.minutes === ''
+        ? ''
+        : ` (${step.minutes} min)`;
+    return `${number}. ${step.detail}${minutes}`;
+  });
+  return ` Method: ${rendered.join(' ')}`;
+}
 
 /**
  * The text stored as this entity's embedding content, and the text the model
@@ -219,14 +249,34 @@ const CONTENT = {
       .join(', ');
     return `${names}. ${group}${taxonomy ? taxonomy + '. ' : ''}${protection}${status ? status + '.' : ''}`.trim();
   },
+
+  // The cookbook dish: English name first so an English cooking question lands
+  // on it, then the romanised and Thai names, the region and category, a one-
+  // line description, the whole ingredient list so "what goes in green curry?"
+  // reaches the right recipe, and the numbered method so "how do I cook it?"
+  // does too - catalog_search returns this string itself, so the steps a
+  // listener hears are the ones stored here.
+  recipe: (row) => {
+    const names = [row.name_en, row.name_local && `(${row.name_local})`, row.name_thai && `(${row.name_thai})`]
+      .filter(Boolean)
+      .join(' ');
+    const where = row.region ? ` ${row.region} Thai` : ' Thai';
+    const time = row.total_minutes != null ? ` About ${row.total_minutes} minutes.` : '';
+    const ingredients = (row.ingredients ?? []).length
+      ? ` Ingredients: ${(row.ingredients ?? []).join(', ')}.`
+      : '';
+    const method = recipeMethod(row.steps);
+    const tips = (row.tips ?? []).length ? ` Tips: ${(row.tips ?? []).join(' ')}` : '';
+    return `${names} — ${row.category}${where}. ${row.description}${time}${ingredients}${method}${tips}`.trim();
+  },
 };
 
-const ENTITY_TYPES = ['species', 'guardian', 'site', 'dnp_species', 'dnp_plant', 'dnp_fauna', 'dnp_wildlife'];
+const ENTITY_TYPES = ['species', 'guardian', 'site', 'dnp_species', 'dnp_plant', 'dnp_fauna', 'dnp_wildlife', 'recipe'];
 
 // Optional args narrow the run to named entity types, e.g.
 //   npm run backfill:embeddings -- dnp_species dnp_plant
 // so the ~61k-row DNP survey and the ~9k-row plant checklist can be embedded
-// without re-embedding the seeded catalogue. No args means all seven, exactly as
+// without re-embedding the seeded catalogue. No args means all eight, exactly as
 // before.
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
 const selected = requested.length ? requested : ENTITY_TYPES;

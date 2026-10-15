@@ -2,6 +2,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describeAqi, fetchSanctuaryConditions, SANCTUARY_COORDINATE } from '../conditions.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 export function registerConditionsTools(server: McpServer): void {
@@ -15,6 +16,9 @@ export function registerConditionsTools(server: McpServer): void {
         'Open-Meteo *modelled* fields for the sanctuary coordinates, not readings from a ' +
         'sensor on site - say so if you report them. Read-only.',
       annotations: { readOnlyHint: true, openWorldHint: true },
+      // SEP-1865: name the MCP App that renders this tool. A host without the
+      // extension ignores it and falls back to the JSON text block.
+      _meta: { ui: { resourceUri: uiUriForTool('get_sanctuary_conditions') } },
     },
     async () => {
       try {
@@ -53,6 +57,11 @@ export function registerConditionsTools(server: McpServer): void {
             source: 'Open-Meteo modelled fields (not an on-site sensor)',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('get_sanctuary_conditions'),
+            invoking: 'Reading sanctuary conditions…',
+            invoked: 'Sanctuary conditions',
+          },
         );
       } catch (error) {
         return errorResult(error);

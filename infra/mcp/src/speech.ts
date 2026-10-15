@@ -26,22 +26,43 @@
 // install it themselves and retry once - the first utterance after a cold start
 // is slow, and every later one is not. That is deliberate: it means a fresh
 // clone works without an out-of-band download step.
+//
+// The mouth has two providers, chosen by TTS_PROVIDER. `speaches` (the default)
+// is Kokoro above. `polly` is Amazon Polly: a hosted English voice that needs an
+// AWS account whose IAM policy allows polly:SynthesizeSpeech - and, unlike
+// Kokoro, bills for every character it speaks. The ears have no such choice:
+// Whisper stays self-hosted either way, and an unset environment is unchanged.
+//
+// The mouth's voice is per request: /voice/speak takes an optional `voice`, one
+// of the ids /health advertises under `speech.voices`, so the client can pick
+// whose voice reads a reply. Naming none speaks the configured default.
 
 import { randomUUID } from 'node:crypto';
+
+import { PollyClient, SynthesizeSpeechCommand, type Engine, type VoiceId } from '@aws-sdk/client-polly';
 import type { FastifyInstance } from 'fastify';
 
 import { resolveCaller } from './identity.js';
+
+/** Which engine voices /voice/speak: the self-hosted Kokoro, or Amazon Polly. */
+export type TtsProvider = 'speaches' | 'polly';
 
 /** The cascade's configuration, read per request so an env change needs no restart. */
 export interface SpeechConfig {
   /** The Speaches base URL, or null when the cascade is not configured. */
   url: string | null;
+  /** Who speaks /voice/speak. Defaults to the self-hosted `speaches`. */
+  ttsProvider: TtsProvider;
   /** The Whisper model behind /voice/transcribe. */
   sttModel: string;
-  /** The Kokoro model behind /voice/speak. */
+  /** The Kokoro model behind /voice/speak (when ttsProvider is `speaches`). */
   ttsModel: string;
   /** The voice Kokoro speaks with. */
   ttsVoice: string;
+  /** The Polly voice /voice/speak uses (when ttsProvider is `polly`). */
+  pollyVoiceId: string;
+  /** The Polly engine: standard, neural, long-form or generative. */
+  pollyEngine: string;
 }
 
 /** How long a transcription or synthesis may take before the route gives up. */
@@ -54,6 +75,28 @@ const INSTALL_TIMEOUT_MS = 300_000;
 const MAX_AUDIO_CHARS = 8_000_000;
 
 /**
+ * The voices /voice/speak offers, per provider. The operator's configured voice
+ * is always offered too (see speechVoices): these lists only bound what a client
+ * may *select*, so a picker cannot name an arbitrary voice - and, on Polly, a
+ * per-character bill the caller never chose. Kokoro's ids all ship with the
+ * Kokoro-82M weights; Polly's are the neural en-US set, which is what
+ * POLLY_ENGINE defaults to (a standard-only voice would fail under it).
+ */
+const KOKORO_VOICES = [
+  'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica',
+  'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+  'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam',
+  'am_michael', 'am_onyx', 'am_puck', 'am_santa',
+  'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+  'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+];
+
+const POLLY_VOICES = [
+  'Joanna', 'Matthew', 'Salli', 'Joey', 'Justin', 'Kendra', 'Kimberly',
+  'Ivy', 'Ruth', 'Stephen', 'Danielle', 'Gregory', 'Kevin',
+];
+
+/**
  * The cascade's settings, with the same defaults compose passes through. A
  * missing SPEECH_URL is a valid configuration, not a broken one - exactly as
  * EMBEDDING_PROVIDER=none keeps semantic search a valid configuration - it just
@@ -62,7 +105,11 @@ const MAX_AUDIO_CHARS = 8_000_000;
 export function speechConfig(): SpeechConfig {
   return {
     url: process.env.SPEECH_URL?.trim().replace(/\/+$/, '') || null,
-    // Multilingual, not `base.en`: the DNP reference tables carry Thai
+    // `speaches` is the default so an environment that does not set this behaves
+    // exactly as it did before Polly existed - the same rule EMBEDDING_PROVIDER
+    // follows. Anything other than `polly` (including unset) means Kokoro.
+    ttsProvider: process.env.TTS_PROVIDER?.trim().toLowerCase() === 'polly' ? 'polly' : 'speaches',
+    // Multilingual, not `base.en`: the forest dataset tables carry Thai
     // (thai_name, protected_area, provinces), and an English-only model cannot
     // output those characters at all, so a spoken Thai name never reaches the
     // query (plan §17.3). Same size class as `base.en`; `small` and
@@ -70,18 +117,50 @@ export function speechConfig(): SpeechConfig {
     sttModel: process.env.SPEECH_STT_MODEL?.trim() || 'Systran/faster-whisper-base',
     ttsModel: process.env.SPEECH_TTS_MODEL?.trim() || 'speaches-ai/Kokoro-82M-v1.0-ONNX',
     ttsVoice: process.env.SPEECH_TTS_VOICE?.trim() || 'af_heart',
+    // A neutral US English voice on the neural engine, so TTS_PROVIDER=polly
+    // works without any further configuration. Polly ships no Thai voice at all.
+    pollyVoiceId: process.env.POLLY_VOICE_ID?.trim() || 'Joanna',
+    pollyEngine: process.env.POLLY_ENGINE?.trim() || 'neural',
   };
+}
+
+/** The voice the mouth speaks with when a request names none. */
+function defaultVoice(cfg: SpeechConfig): string {
+  return cfg.ttsProvider === 'polly' ? cfg.pollyVoiceId : cfg.ttsVoice;
+}
+
+/**
+ * The voice ids /voice/speak accepts for the active provider - the list /health
+ * advertises and a client picks from. The configured default is prepended when it
+ * is outside the curated list, so an operator who points SPEECH_TTS_VOICE (or
+ * POLLY_VOICE_ID) at any voice id still sees it offered.
+ */
+export function speechVoices(provider: TtsProvider, current: string): string[] {
+  const voices = provider === 'polly' ? POLLY_VOICES : KOKORO_VOICES;
+  return current && !voices.includes(current) ? [current, ...voices] : [...voices];
 }
 
 /** Whether the voice routes can serve, and with what - for /health. */
 export function speechHealth(): {
   configured: boolean;
+  ttsProvider: TtsProvider;
   sttModel: string;
   ttsModel: string;
   voice: string;
+  voices: string[];
 } {
-  const { url, sttModel, ttsModel, ttsVoice } = speechConfig();
-  return { configured: url !== null, sttModel, ttsModel, voice: ttsVoice };
+  const cfg = speechConfig();
+  const voice = defaultVoice(cfg);
+  // Polly needs no Speaches URL, so the mouth can serve even when the cascade is
+  // off - but the ears cannot, so `configured` keeps meaning "the cascade is on".
+  return {
+    configured: cfg.url !== null,
+    ttsProvider: cfg.ttsProvider,
+    sttModel: cfg.sttModel,
+    ttsModel: cfg.ttsModel,
+    voice,
+    voices: speechVoices(cfg.ttsProvider, voice),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -119,7 +198,10 @@ async function installModel(cfg: SpeechConfig, model: string, log: FastifyInstan
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    log.error({ status: response.status, model }, 'speech: model install was refused');
+    log.error(
+      { status: response.status, model, detail: detail.slice(0, 300) },
+      'speech: model install was refused',
+    );
     return false;
   }
   log.info({ model }, 'speech: model installed');
@@ -181,6 +263,67 @@ function parseAudioInput(value: string): { buffer: Buffer; contentType: string }
   }
   const buffer = Buffer.from(value.trim(), 'base64');
   return buffer.length ? { buffer, contentType: 'audio/webm' } : null;
+}
+
+// ------------------------------------------------------------------ polly ---
+
+/**
+ * The Polly client, built once on first use.
+ *
+ * Polly reuses the Bedrock credentials the MCP container already carries
+ * (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or AWS_BEARER_TOKEN_BEDROCK), so
+ * there is nothing new to configure beyond the voice. POLLY_REGION overrides the
+ * region when Polly is offered somewhere Bedrock is not. Built lazily so /health
+ * can name the provider without a call - the failure belongs to the one request
+ * that needs it, exactly as bedrockClient() in embed.ts.
+ */
+let polly: PollyClient | null = null;
+
+function pollyClient(): PollyClient {
+  return (polly ??= new PollyClient({
+    region:
+      process.env.POLLY_REGION?.trim() ||
+      process.env.BEDROCK_REGION?.trim() ||
+      process.env.AWS_REGION?.trim() ||
+      undefined,
+  }));
+}
+
+/**
+ * Words the failure so a call site can act on it. The one worth naming is
+ * AccessDeniedException: it means the IAM policy behind these credentials does
+ * not allow polly:SynthesizeSpeech, which no retry or voice change can fix.
+ */
+function pollyError(error: unknown): string {
+  const name = (error as { name?: unknown })?.name;
+  if (name === 'AccessDeniedException') {
+    return (
+      'Polly denied polly:SynthesizeSpeech for these credentials. Add it to the ' +
+      'IAM policy behind AWS_ACCESS_KEY_ID (POLLY_VOICE_ID / TTS_PROVIDER=polly ' +
+      'cannot work around it).'
+    );
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  return `Polly could not synthesise that reply. ${detail.slice(0, 300)}`.trim();
+}
+
+/** One utterance as MP3, straight from Polly. Billed per character. */
+async function pollySynthesize(text: string, voiceId: string, cfg: SpeechConfig): Promise<Buffer> {
+  const response = await pollyClient().send(
+    new SynthesizeSpeechCommand({
+      Text: text,
+      OutputFormat: 'mp3',
+      // The voice and engine are free strings, so the SDK's literal unions are
+      // asserted rather than validated - an unknown voice fails at Polly, not at
+      // boot. The route bounds the voice against speechVoices before we get here.
+      VoiceId: voiceId as VoiceId,
+      Engine: cfg.pollyEngine as Engine,
+    }),
+  );
+  if (!response.AudioStream) {
+    return Buffer.alloc(0);
+  }
+  return Buffer.from(await response.AudioStream.transformToByteArray());
 }
 
 /**
@@ -280,15 +423,47 @@ export function registerSpeechRoutes(app: FastifyInstance): void {
     if (!callerGuard(request.headers)) return reply.code(401).send({ error: CALLER_NEEDED });
 
     const cfg = speechConfig();
-    if (!cfg.url) return reply.code(503).send({ error: NOT_CONFIGURED });
 
     const body: unknown = request.body;
     if (!isRecord(body) || typeof body.text !== 'string' || !body.text.trim()) {
-      return reply.code(400).send({ error: 'The speak body must be { text: string }.' });
+      return reply.code(400).send({ error: 'The speak body must be { text: string, voice?: string }.' });
     }
     // The same ceiling the router applies to an utterance: a reply read aloud is
     // a sentence or two, not an essay, and an unbounded one is a mistake.
     const text = body.text.trim().slice(0, 2000);
+
+    // The optional voice: one of the ids /health advertises (speechVoices), so a
+    // client can pick the mouth it hears. Anything else is refused here rather
+    // than relayed - an unvalidated name would be an arbitrary voice, and on
+    // Polly a per-character bill the caller never chose.
+    const fallback = defaultVoice(cfg);
+    const voices = speechVoices(cfg.ttsProvider, fallback);
+    const requested = body.voice;
+    if (requested !== undefined && (typeof requested !== 'string' || !voices.includes(requested))) {
+      return reply.code(400).send({ error: `Unknown voice. Choose one of: ${voices.join(', ')}.` });
+    }
+    const voice = typeof requested === 'string' ? requested : fallback;
+
+    // Polly needs no Speaches URL, so the provider decides which dependency is
+    // required: only the self-hosted path 503s when SPEECH_URL is unset.
+    if (cfg.ttsProvider === 'polly') {
+      let audio: Buffer;
+      try {
+        audio = await pollySynthesize(text, voice, cfg);
+      } catch (error) {
+        request.log.error({ err: error }, 'speech: Polly speak failed');
+        return reply.code(502).send({ error: pollyError(error) });
+      }
+      if (!audio.length) {
+        return reply.code(502).send({ error: 'Polly synthesised no audio.' });
+      }
+      return reply
+        .header('Content-Type', 'audio/mpeg')
+        .header('Cache-Control', 'no-store')
+        .send(audio);
+    }
+
+    if (!cfg.url) return reply.code(503).send({ error: NOT_CONFIGURED });
 
     const attempt = (): Promise<Response> =>
       fetchWithTimeout(
@@ -299,7 +474,7 @@ export function registerSpeechRoutes(app: FastifyInstance): void {
           body: JSON.stringify({
             input: text,
             model: cfg.ttsModel,
-            voice: cfg.ttsVoice,
+            voice,
             response_format: 'mp3',
           }),
         },

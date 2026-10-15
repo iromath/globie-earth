@@ -434,3 +434,70 @@ pre.mono {
   font-size: 0.8rem;
   flex: 1 1 320px;
 }
+
+/* The soundscape player: a title, the browser's own transport control, and a
+   status line that narrates the render while it runs. */
+.player {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.player-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+/* The audio element is the engine, not the interface: the mini player below
+   drives it, so it stays out of the layout entirely. */
+.player audio {
+  display: none;
+}
+
+/* The mini player: one bar of transport controls the page owns, so a render
+   that turns ready can start on its own - the browser's own control could only
+   be started by a click. */
+.mini-player {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.mini-player[hidden] {
+  display: none;
+}
+
+.player-btn {
+  flex: none;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.player-time {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  min-width: 2.6rem;
+  text-align: center;
+}
+
+.player-seek {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.player-volume {
+  flex: none;
+  width: 5rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

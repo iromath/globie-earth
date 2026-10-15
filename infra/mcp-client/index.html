@@ -81,33 +81,47 @@
           <button id="mic-button" type="button">Speak</button>
           <input id="voice-query" type="text" placeholder="which tree fixes paddy soil" />
           <button id="ask-button" type="button">Ask</button>
+          <!-- Play reads the last reply aloud again; Stop silences a reply the
+               moment it starts, so neither the server's voice nor the browser's
+               has to be waited out. Both act on the AI's TTS voice only. -->
+          <button id="play-speaking" type="button" disabled>Play reply</button>
           <button id="stop-speaking" type="button" hidden>Stop reading</button>
         </div>
-        <!-- The model ids mirror ROUTER_MODELS in infra/mcp/src/router.ts; the server refuses any other name. -->
+        <!-- The model ids mirror ROUTER_MODELS in infra/mcp/src/llm.ts; the server refuses any other name. -->
         <div class="voice-row">
           <label class="voice-field">
             <span>Router model</span>
             <select id="voice-model">
               <option value="deepseek-flash">deepseek-flash</option>
               <option value="deepseek-v4-flash-vision-exp">deepseek-v4-flash-vision-exp · vision</option>
+              <option value="amazon.nova-lite-v1:0">amazon.nova-lite-v1:0 · vision (Nova)</option>
+              <option value="amazon.nova-pro-v1:0">amazon.nova-pro-v1:0 · vision (Nova)</option>
             </select>
           </label>
           <label class="voice-field">
             <span>Photo <em>(optional — needs the vision model)</em></span>
             <input id="voice-image" type="file" accept="image/*" />
           </label>
-          <!-- Narrow a search to one DNP reference dataset by voice. The host only passes this
+          <!-- Narrow a search to one Globie Earth dataset by voice. The host only passes this
                value through when the routed tool actually declares an entity_type argument
                (see ask() in src/main.ts), so it can never corrupt an unrelated call. -->
           <label class="voice-field">
             <span>Source <em>(optional)</em></span>
             <select id="voice-source">
-              <option value="">Any source (Globie + DNP)</option>
-              <option value="dnp_species">DNP biodiversity survey</option>
-              <option value="dnp_plant">DNP plant checklist</option>
-              <option value="dnp_fauna">DNP park fauna observations</option>
-              <option value="dnp_wildlife">DNP wildlife checklist</option>
+              <option value="">Any source (Globie Earth)</option>
+              <option value="dnp_species">Biodiversity survey</option>
+              <option value="dnp_plant">Plant checklist</option>
+              <option value="dnp_fauna">Park fauna observations</option>
+              <option value="dnp_wildlife">Wildlife checklist</option>
             </select>
+          </label>
+          <!-- The voice the server's mouth reads replies with. Filled from the ids the
+               server advertises under /health (speech.voices) once connected; the server
+               refuses any id it did not offer. Shares the server's own mouth only, so it
+               is disabled while replies fall back to the browser's synthesis. -->
+          <label class="voice-field">
+            <span>TTS voice</span>
+            <select id="voice-tts"></select>
           </label>
         </div>
         <p class="hint" id="voice-image-note" hidden></p>
@@ -138,6 +152,54 @@
             <button id="download-transcript" type="button">Download JSON</button>
           </div>
           <ol class="transcript" id="transcript"></ol>
+        </div>
+      </section>
+
+      <!-- A generated soundscape is queued, not finished. This panel appears as
+           soon as one is queued, polls the studio through the read-only
+           get_soundscape tool until the render is ready, then hands over a real
+           player. The audio is served by the studio origin, not this page. -->
+      <section class="panel" id="player-panel" hidden aria-labelledby="player-heading">
+        <h2 id="player-heading">5 · Your soundscape</h2>
+        <p class="hint">
+          A generated piece renders asynchronously, so this panel checks the studio — through
+          the read-only <code>get_soundscape</code> tool — until the audio is ready, then plays
+          it here. The audio file comes from the studio origin, not from this page.
+        </p>
+        <div class="player">
+          <p class="player-title" id="player-title"></p>
+          <!-- A mini player: one control bar the page drives itself, so a render
+               that turns ready can start on its own instead of waiting on the
+               browser's own transport control. The <audio> element is the engine
+               and stays out of the layout; every control below acts on it. -->
+          <div class="mini-player" id="mini-player" hidden>
+            <button id="player-toggle" class="player-btn" type="button" aria-label="Play">Play</button>
+            <span class="player-time" id="player-elapsed">0:00</span>
+            <input
+              id="player-seek"
+              class="player-seek"
+              type="range"
+              min="0"
+              max="1000"
+              step="1"
+              value="0"
+              aria-label="Seek"
+            />
+            <span class="player-time" id="player-total">0:00</span>
+            <button id="player-mute" class="player-btn" type="button" aria-label="Mute">Mute</button>
+            <input
+              id="player-volume"
+              class="player-volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="1"
+              aria-label="Volume"
+            />
+          </div>
+          <audio id="soundscape-audio" preload="metadata"></audio>
+          <p class="status" id="player-status" role="status"></p>
         </div>
       </section>
     </div>

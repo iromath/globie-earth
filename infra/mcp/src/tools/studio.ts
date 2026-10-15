@@ -1,20 +1,49 @@
-// The soundscape tool: queuing a generated piece through the studio proxy.
+// The soundscape tools: queuing a generated piece through the studio proxy, and
+// checking on one that is already rendering.
 //
 // The proxy holds the Gemini key and enforces the daily render quota; this server
 // sees neither. A track renders asynchronously - one synchronous provider call
-// that can take minutes - so the tool returns the track id and its status rather
-// than blocking a voice turn on the render.
+// that can take minutes - so queuing returns the track id and its status rather
+// than blocking a voice turn on the render. `get_soundscape` then polls that
+// track: the client shows the playable audio the moment the render turns ready.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Caller } from '../identity.js';
-import { callProxy } from '../proxy.js';
+import { callProxy, publicUrl } from '../proxy.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
+
+type TrackStatus = 'queued' | 'generating' | 'ready' | 'failed';
 
 /** What POST /v1/studio/tracks answers with (infra/studio/src/server.ts). */
 interface QueuedTrack {
   id: string;
-  status: 'queued' | 'generating' | 'ready' | 'failed';
+  status: TrackStatus;
+}
+
+/** What GET /v1/studio/tracks/:id answers with (infra/studio/src/server.ts). */
+interface StudioTrack {
+  id: string;
+  status: TrackStatus;
+  title: string;
+  durationSec: number | null;
+  /** Relative to the studio origin, and only set once the render is ready. */
+  audioUrl: string | null;
+  error: string | null;
+}
+
+/** A sentence for the ear, written from the track's actual state. */
+function spokenStatus(track: StudioTrack): string {
+  const name = track.title ? `"${track.title}"` : 'Your soundscape';
+  switch (track.status) {
+    case 'ready':
+      return `${name} is ready. Play it in the client to hear it.`;
+    case 'failed':
+      return `${name} could not be rendered.`;
+    default:
+      return `${name} is still rendering. It is not ready yet.`;
+  }
 }
 
 export function registerStudioTools(server: McpServer, caller: Caller): void {
@@ -54,6 +83,7 @@ export function registerStudioTools(server: McpServer, caller: Caller): void {
           .describe('Target length in seconds.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('generate_soundscape') } },
     },
     async ({ prompt, style, title, durationSec }) => {
       try {
@@ -80,6 +110,58 @@ export function registerStudioTools(server: McpServer, caller: Caller): void {
               'say it has been queued, not that it has been produced.',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('generate_soundscape'),
+            invoking: 'Queuing the soundscape…',
+            invoked: title ?? prompt.slice(0, 80),
+          },
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_soundscape',
+    {
+      title: 'Check a soundscape',
+      description:
+        'Checks a soundscape that generate_soundscape queued, by the track id it returned. ' +
+        'Reports the current status and, once the render has finished, the audio URL to play. ' +
+        'Read-only: it spends no quota and changes nothing, so it is safe to call repeatedly ' +
+        'while a render is still running. Say a soundscape is ready only when this says ' +
+        '"ready"; while it says "queued" or "generating" the audio does not exist yet.',
+      inputSchema: {
+        trackId: z.string().min(1).describe('The trackId that generate_soundscape returned.'),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('get_soundscape') } },
+    },
+    async ({ trackId }) => {
+      try {
+        const track = await callProxy<StudioTrack>(
+          'studio',
+          `/v1/studio/tracks/${encodeURIComponent(trackId)}`,
+          caller,
+        );
+        return jsonResult(
+          {
+            trackId: track.id,
+            status: track.status,
+            title: track.title,
+            durationSec: track.durationSec,
+            // The studio answers with a path relative to itself; hand back the
+            // full URL so the player needs no mapping of its own.
+            audioUrl: publicUrl('studio', track.audioUrl),
+            error: track.error,
+          },
+          spokenStatus(track),
+          {
+            resourceUri: uiUriForTool('get_soundscape'),
+            invoking: 'Checking the soundscape…',
+            invoked: track.title || 'Soundscape',
+          },
         );
       } catch (error) {
         return errorResult(error);

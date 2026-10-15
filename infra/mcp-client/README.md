@@ -79,9 +79,9 @@ The production build bundles the MCP SDK into the browser bundle — the SDK's
 Streamable HTTP transport and `Client` import no `node:` built-ins, so a real MCP
 client runs in a browser with no polyfills.
 
-## The router model and photos
+## The router model, the photo and the voice
 
-The **Voice** panel adds two controls to the ask row:
+The **Voice** panel adds controls to the ask row:
 
 - **Router model** — which model `POST /route` uses: `deepseek-flash` (text) or
   `deepseek-v4-flash-vision-exp` (reads a photo). The ids mirror `ROUTER_MODELS`
@@ -90,9 +90,37 @@ The **Voice** panel adds two controls to the ask row:
   downscales it to a 1024-px edge and sends it as a JPEG data URL with your next
   question, and only to the vision model. With a text-only model selected, the
   server refuses the photo rather than ignoring it.
+- **TTS voice** — which voice the server's own mouth reads replies with. The
+  options are the ids the server advertises under `speech.voices` in `/health`
+  (its configured voice first), and the server refuses any other id, so the list
+  cannot drift from the server. It applies only to the server's mouth: while
+  replies fall back to the browser's speech synthesis the control is disabled and
+  reads "Browser voice". Leaving the configured default selected is the same as
+  before this control existed.
+- **Play reply / Stop reading** — the two controls over the AI's spoken voice.
+  **Play reply** repeats the last reply aloud (disabled until there is one), and
+  **Stop reading** silences a reply the moment it starts, so neither the server's
+  voice nor the browser's has to be waited out or talked over.
 
 The page never holds a model key. It sends a model *name* to the server, which
 owns the credential, and the answer says which model answered (`via …`).
+
+## The soundscape player
+
+A generated soundscape is queued, not finished: `generate_soundscape` renders
+asynchronously and answers with a track id and a status of `queued`. So when a
+tool result carries a soundscape, the page reveals the **Your soundscape** panel
+and — without a second tap — polls the read-only `get_soundscape` tool for that
+track until the render turns `ready` (quickly at first, then backing off, and
+giving up after a bounded number of checks). The moment it is ready, the panel
+hands over the browser's own audio player — a real playbar with play, seek and
+volume — pointed at the studio origin, and says to press play.
+
+The audio is fetched from the studio origin, not from this page or the MCP
+server, so the page derives that origin from the endpoint it connected to the
+same way it derives the API base (`mcp.*` → `studio.*`, localhost → the local
+studio port). While the render is still running the panel says so and keeps
+checking; if it fails, the panel shows the studio's reason.
 
 ## Evidence, not vibes
 

@@ -52,6 +52,11 @@ ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
+# The MCP Apps the tools point at (src/ui/apps.ts reads them from ../../ui
+# relative to dist/ui/, i.e. /app/ui): the four shared archetype documents -
+# card, list, carousel and map. They are plain HTML with no build step, so they
+# come straight from the build context.
+COPY ui ./ui
 # Owned by node so the cache stays writable without running the server as root.
 COPY --chown=node:node --from=build /app/.cache ./.cache
 

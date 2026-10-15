@@ -8,9 +8,9 @@ tools an Alexa+ (or any other MCP) host can call.
 This service is the **Alexa+ track submission**. It is self-hosted on the same
 Easypanel stack as `studio` and `podcast` (reached at `https://mcp.globie.earth`)
 and is deliberately host-agnostic: the only coupling to the rest of the stack is
-three origins (`POSTGREST_URL`, `STUDIO_URL`, `PODCAST_URL`) and two request
-headers. One tool and one route also reach the English Wikipedia Action API,
-which is keyless and outside the stack entirely.
+four origins (`POSTGREST_URL`, `STUDIO_URL`, `PODCAST_URL`, `OPENMIND_API_URL`)
+and two request headers. One tool and one route also reach the English Wikipedia
+Action API, which is keyless and outside the stack entirely.
 
 - **Transport:** MCP Streamable HTTP at `POST /mcp` (also `GET` for the optional
   server-to-client stream and `DELETE` to end a session).
@@ -23,22 +23,30 @@ which is keyless and outside the stack entirely.
 
 ## Tools
 
-Eleven tools. Two change state (`adopt_species` and `generate_soundscape`); the
-rest are read-only:
+**51 tools in two groups.** The first group — 15 Globie Earth tools — exposes the
+reforestation backend. Two of them change state (`adopt_species` and
+`generate_soundscape`); the rest are read-only. The second group — 36 **Openmind
+Travel** tools (prefixed `om_`) — wraps the Openmind.Travel REST catalogue
+(tours, destinations, flights, guides, community, trip planning and impact).
+All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`.
 
 | Tool | What it does | Backend |
 | --- | --- | --- |
-| `search_forest_knowledge` | Search across species, sites and guardian lore, together with the four Thai DNP reference datasets (biodiversity survey, plant checklist, park fauna observations, wildlife checklist). Semantic when a provider is configured, keyword otherwise. | Self-hosted multilingual-e5-small by default (Amazon Titan V1 optional) → `catalog_search` RPC; keyword fallback reads the catalogue and `dnp_*` tables |
+| `search_forest_knowledge` | Search across species, sites and guardian lore, together with Globie Earth's four forest datasets (biodiversity survey, plant checklist, park fauna observations, wildlife checklist). Semantic when a provider is configured, keyword otherwise. | Self-hosted multilingual-e5-small by default (Amazon Titan V1 optional) → `catalog_search` RPC; keyword fallback reads the catalogue and `dnp_*` tables |
+| `search_local_culture` | Searches Globie Earth's Local Culture collection — its own Thai cookbook, "Cookbook Version Kai & Shea" — by dish, ingredient, region or category. Semantic when a provider is configured, keyword otherwise. | Same `catalog_search` RPC, restricted to `entity_type = 'recipe'`; keyword fallback reads `cookbook_recipes` |
+| `get_recipe` | One full recipe: English/romanised/Thai names, region, category, servings, total time, ingredients, numbered method with per-step times, and tips. Resolves by id, slug or dish name. | `cookbook_recipes` read (RLS-scoped, world-readable) |
 | `recommend_species` | Recommends species from the caller's own past adoptions. | `recommend_species` RPC |
 | `get_sanctuary_conditions` | Ambient CO₂, European AQI, humidity and air temperature at the sanctuary. | Open-Meteo (keyless, modelled fields) |
-| `describe_photo` | Describes an attached photo — a plant, landscape, object, room or document. | DeepSeek `deepseek-v4-flash-vision-exp` (not the catalogue) |
+| `describe_photo` | Describes an attached photo — a plant, landscape, object, room or document. | DeepSeek `deepseek-v4-flash-vision-exp` or Amazon Bedrock Nova, chosen by `VISION_PROVIDER` (not the catalogue) |
 | `describe_species` | The English Wikipedia lead section for one species, by scientific or common name. | Wikipedia Action API (keyless, CC BY-SA 4.0, text only) |
 | `adopt_species` | Records an adoption (mutating). Idempotent when a store transaction id is supplied. | `create_adoption` + `award_eco_tokens` RPCs |
 | `get_my_deeds` | The Living Deeds issued for this caller's adoptions, newest first. | `living_deeds` read (RLS-scoped) |
 | `get_eco_balance` | This caller's eco-token balance. | `eco_token_balance` read (RLS-scoped) |
 | `generate_soundscape` | Queues a generated piece of music for the sanctuary (mutating). | Studio proxy `POST /v1/studio/tracks` |
+| `get_soundscape` | Checks a queued soundscape by its track id, and returns the audio URL once the render is ready. | Studio proxy `GET /v1/studio/tracks/:id` |
 | `search_podcasts` | Searches the podcast library for shows about the living world. | Podcast proxy `GET /v1/podcast/search` |
 | `get_trending_podcasts` | Lists shows trending in the podcast library, optionally by category. | Podcast proxy `GET /v1/podcast/trending` |
+| `get_podcasts_by_theme` | Lists the listening themes, or the shows matching one theme. | Podcast proxy `GET /v1/podcast/themes`, `GET /v1/podcast/bytheme` |
 
 `adopt_species` changes real state, so it is annotated mutating
 (`readOnlyHint: false`). When the host passes the store's `reference`, a retry
@@ -60,11 +68,57 @@ pulls **text only** — never Wikipedia's lead image, which would collide with t
 app's strict photo-attribution model — and returns a clear "no article"
 explanation rather than an empty record when the name matches nothing.
 
+The Local Culture tools, `search_local_culture` and `get_recipe`, read the
+project's **own** cookbook, "Cookbook Version Kai & Shea" (Openmind Projects),
+curated by hand into `scripts/data/cookbook-recipes.json` and imported by
+`npm run import:cookbook` into `api.cookbook_recipes`
+(`infra/schema/254_cookbook.sql`). The recipes are embedded into the **same**
+flat `api.embeddings` space as the forest data, so `search_local_culture` is
+`catalog_search` narrowed to `entity_type = 'recipe'` rather than a second search
+engine. `search_forest_knowledge` is the forest tool, so it filters recipes out
+of its results — the flat space can place a dish near a forest question, but a
+cooking question belongs on this tool. `get_recipe` then returns the whole dish,
+which a search passage does not carry. The content is Globie's own, so a host
+never passes it off as a scraped recipe site.
+
 `generate_soundscape` is mutating too, and it spends the stack's shared daily
 render quota, which the studio proxy enforces. Rendering is asynchronous — the
 tool returns a track id and a status of `queued`, never a finished recording, so
-it must never be reported as produced. The studio and podcast proxies hold the
-Gemini and Podcast Index credentials; this server holds neither.
+it must never be reported as produced. `get_soundscape` is its read-only
+companion: it polls that track id and, once the render is `ready`, returns the
+`audioUrl` a player can fetch. It spends no quota and changes nothing, so it is
+safe to call repeatedly while a render runs. The studio and podcast proxies hold
+the Gemini and Podcast Index credentials; this server holds neither.
+
+`get_podcasts_by_theme` reads the shelf's curated listening themes — the same
+list the app's Listen chips draw from, served by the proxy on
+`/v1/podcast/themes`. A theme is a full-text topic, not a mirror category: the
+index carries no `meditation` or `sustainability` token, so each theme resolves
+as a search over the same local index browse and search use. Called with no
+theme it returns the list; called with one it returns the shows matching it.
+
+### Openmind Travel tools (`om_*`)
+
+The 36 `om_`-prefixed tools wrap the **Openmind.Travel** REST catalogue
+(`https://bokunapi.9o9.io`, overridable via `OPENMIND_API_URL`). They are
+discovered by Alexa+ the same way the Globie tools are — through `tools/list` —
+and return the same `jsonResult(value, spoken)` shape (a JSON block for the
+screen plus a `audience: ["user"]` spoken line). All hit the public REST API
+directly; no caller identity or auth is needed for reads.
+
+| Group | Tools | What they do |
+| --- | --- | --- |
+| **Tours** | `om_search_tours`, `om_get_tour_facets`, `om_get_tour`, `om_list_volunteer_projects`, `om_get_partner`, `om_search_suggestions` | Search tours & activities (Viator, Bókun, GetYourGuide), get tour details and facets, list volunteer projects, partner info, and search suggestions. |
+| **Destinations** | `om_search_destinations`, `om_list_categories`, `om_list_countries`, `om_get_popular_destinations`, `om_autocomplete_airport` | Search destinations, browse categories/countries, popular destinations, and autocomplete airport codes. |
+| **Guides** | `om_list_country_guides`, `om_get_country_guide`, `om_list_airline_guides`, `om_get_airline_guide`, `om_search_youtube_videos` | Country and airline travel guides, plus YouTube travel video search. |
+| **Flights** | `om_search_flights`, `om_get_flight_calendar`, `om_search_transport` | Flight search (two-step: initiate → consume SSE stream of results), monthly price calendar, and ground/sea transport links. |
+| **Community** | `om_get_globie_pet`, `om_list_community_posts`, `om_search_community_posts`, `om_get_community_post` | The Globie community feed and pet projection. User-generated content is labelled as such in the tool description. |
+| **Trips** | `om_plan_trip`, `om_list_trip_ideas`, `om_get_trip_idea`, `om_save_trip_idea`, `om_get_itinerary`, `om_save_itinerary` | AI trip planning, trip-idea browsing, and itinerary save/load (`om_save_*` are the only mutating `om_` tools). |
+| **Impact** | `om_get_impact_overview`, `om_list_impact_causes`, `om_get_impact_cause`, `om_get_impact_travel_options`, `om_list_impact_treasures`, `om_get_impact_treasure`, `om_get_impact_stories` | OpenmindProjects impact data: fundraising progress, SDG causes, impact treasures, stories, and travel options that fund projects. |
+
+The impact data (causes, treasures, stories) is served from static data baked
+into the server (`src/openmind/impactData.ts`); `om_get_impact_travel_options`
+is the one impact tool that hits the live tours/projects API.
 
 ## Resources
 
@@ -78,17 +132,16 @@ with `new URL()` before dispatch, so it must be absolute).
 | `globie://guardian/{id}` | One guardian's lore, by id. |
 | `globie://site/{id}` | One stop on the trail, by numeric id. |
 | `globie://me/deeds` | This caller's Living Deeds — the read-only mirror of `get_my_deeds`. |
-| `globie://dnp/{id}` | One surveyed species record from the DNP biodiversity survey, by numeric id. |
-| `globie://dnp-plant/{id}` | One species from the DNP national plant checklist, by numeric id. |
-| `globie://dnp-fauna/{id}` | One fauna record from the DNP national-park fauna observations, by numeric id. |
-| `globie://dnp-wildlife/{id}` | One species from the DNP national wildlife checklist, by numeric id. |
+| `globie://dnp/{id}` | One surveyed species record from the biodiversity survey, by numeric id. |
+| `globie://dnp-plant/{id}` | One species from the national plant checklist, by numeric id. |
+| `globie://dnp-fauna/{id}` | One fauna record from the national-park fauna observations, by numeric id. |
+| `globie://dnp-wildlife/{id}` | One species from the national wildlife checklist, by numeric id. |
 
 The three catalogue templates are world-readable; `globie://me/deeds` is
 device-scoped by row-level security, exactly like the tool it mirrors.
 
-The four `globie://dnp-*` templates read the same external reference datasets as
-`search_forest_knowledge` — Thai Department of National Parks open data under the
-Open Data Common licence, **not** part of the adoptable Globie catalogue. They
+The four `globie://dnp-*` templates read the same forest datasets as
+`search_forest_knowledge` — Globie Earth's own reference data. They
 are addressed by numeric id only and are registered with `{ list: undefined }`,
 so they are **not** enumerated by `resources/list` (the datasets run to tens of
 thousands of rows, and the SDK skips any template without a `list` callback).
@@ -129,20 +182,26 @@ POST /route          X-Device-Id (or demo bearer) required — the same identity
     "rationale": "…", "model": "deepseek-v4-flash-vision-exp" }
 ```
 
-The model is an OpenAI-compatible chat-completions endpoint with function
-calling. `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` / `DEEPSEEK_API_KEY` configure it,
-read per request so an env change needs no restart; a missing key is a clear
-`503` rather than a boot failure. The route is gated by the same identity as
-`/mcp`, because an open `/route` would be a relay that spends this server's key
-for anyone who finds it.
+Two providers stand behind the router, and the caller picks one by naming a model
+id, never a key or an endpoint. DeepSeek is an OpenAI-compatible
+chat-completions endpoint with function calling, configured by
+`DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` / `DEEPSEEK_API_KEY`. **Amazon Bedrock
+Nova** is served through the Bedrock **Converse API** and reuses the Bedrock
+credentials (`BEDROCK_REGION` / `AWS_*`) the embedding provider already reads.
+Both are read per request, so an env change needs no restart; a provider whose
+credentials are missing is a clear `503` rather than a boot failure. The route is
+gated by the same identity as `/mcp`, because an open `/route` would be a relay
+that spends this server's key for anyone who finds it.
 
-**Models.** A caller may name one of two — the allowlist `ROUTER_MODELS` in
-`src/router.ts`:
+**Models.** A caller may name one of four — the provider-tagged allowlist
+`ROUTER_MODELS` in `src/llm.ts`:
 
-| Model id | Vision | Notes |
-| --- | --- | --- |
-| `deepseek-flash` | no | The default, and what `DEEPSEEK_MODEL` falls back to. |
-| `deepseek-v4-flash-vision-exp` | **yes** | Reads a photo alongside the utterance. |
+| Model id | Provider | Vision | Notes |
+| --- | --- | --- | --- |
+| `deepseek-flash` | DeepSeek | no | The default, and what `DEEPSEEK_MODEL` falls back to. |
+| `deepseek-v4-flash-vision-exp` | DeepSeek | **yes** | Reads a photo alongside the utterance. |
+| `amazon.nova-lite-v1:0` | Nova | **yes** | Cheaper Bedrock vision; needs the Bedrock credentials. |
+| `amazon.nova-pro-v1:0` | Nova | **yes** | The default Nova model (`NOVA_MODEL`); needs the Bedrock credentials. |
 
 A name off that list is refused (`400`) rather than forwarded, so the allowlist
 cannot be walked past to bill some other model to this server's key. Omitting
@@ -203,9 +262,15 @@ POST /voice/transcribe   X-Device-Id (or demo bearer) required — the same iden
 → { "text": "which tree fixes paddy soil", "model": "Systran/faster-whisper-base" }
 
 POST /voice/speak        X-Device-Id (or demo bearer) required
-{ "text": "Kae Na fixes paddy soil." }
+{ "text": "Kae Na fixes paddy soil." }                 // voice is optional
 → audio/mpeg  (Kokoro, af_heart)
 ```
+
+`/voice/speak` takes an optional `voice` naming one of the ids `GET /health`
+lists under `speech.voices` — Kokoro's voice set, or Polly's neural English set —
+so the client can pick whose voice reads a reply; any other name is refused
+rather than relayed. Naming none speaks the configured default (`SPEECH_TTS_VOICE`
+for Kokoro, `POLLY_VOICE_ID` for Polly).
 
 This is the free, private, unlimited alternative to a native realtime vendor
 (OpenAI Realtime, Gemini Live): there is no per-minute bill and no audio leaves
@@ -235,7 +300,7 @@ reclaim them and a container recreate does not re-download.
 **Sizing.** The compose stack's Docker VM reports ~958 MiB of RAM and one CPU, so
 `SPEECH_STT_MODEL` defaults to the multilingual `Systran/faster-whisper-base` at
 `int8` — the same size class as the English `base.en` but able to output the Thai
-the DNP reference data carries — which fits alongside Kokoro (~480 MiB resident
+the forest data carries — which fits alongside Kokoro (~480 MiB resident
 for both). The multilingual `whisper-small` alongside Kokoro is OOM-killed at that
 size; raise it once the VM grows. Both models unload after `WHISPER__TTL` (300 s)
 idle.
@@ -296,7 +361,7 @@ Four things happen in **one order that cannot be reordered**:
 POST /contribute        X-Device-Id (or demo bearer) required — the same identity /mcp takes
 {
   "speciesType": "dnp_plant",     // dnp_plant | dnp_fauna | dnp_wildlife | dnp_species
-  "speciesId": 12,                // the DNP row id
+  "speciesId": 12,                // the dataset row id
   "speciesName": "…",             // optional label
   "attempt": 1,                   // 2 after the visitor adds the organs Globie asked for
   "photos": [                     // up to 4 media files; at most 1 video
@@ -323,8 +388,9 @@ other` (anything unrecognised is kept as `other`, not refused). A single-photo
 
 Limits: ≤ 4 media files, ≤ 1 video, ≤ 4 sampled frames per video; 5 MB per photo,
 24 MB per video, 1 MB per frame, 32 MB total (base64-decoded). A `503` means the
-route is unconfigured — `DEEPSEEK_API_KEY` for the scan, or the `MINIO_*` set for
-storage.
+route is unconfigured — the credentials of the `VISION_PROVIDER` in use
+(`DEEPSEEK_API_KEY` for DeepSeek, the Bedrock `AWS_*` for Nova) for the scan, or
+the `MINIO_*` set for storage.
 
 ```
 DELETE /contribute/<uuid>   X-Device-Id (the owner's) required
@@ -371,7 +437,7 @@ moderator is an ordinary device that happens to have a row in `api.moderators`; 
 service key is involved. The decision is pinned to `status=eq.pending`, so a
 contribution can be decided exactly once.
 
-## Authentication (and what this demo honestly is not)
+## Authentication (three paths, two of them ours)
 
 Two credentials are accepted, matching the rest of the stack:
 
@@ -386,12 +452,40 @@ demo also accepts a **static bearer token** (`MCP_BEARER_TOKEN`). The server
 exchanges it, at the MCP edge, for `MCP_DEMO_DEVICE_ID` and never forwards the
 token itself onward.
 
-**This static token is not MCP OAuth 2.1, and this README does not claim it is.**
-It is a shared demo secret standing in for a device identity. The production
-path is Amazon's Alexa+ MCP account linking — the **OAuth 2.1 Authorization Code
-Grant with PKCE S256**, implicit not supported — which is **not built here**.
-Treat the token like
-any other secret: server-side only, never a `VITE_` variable.
+**This static token is a shared demo secret standing in for a device identity**,
+not MCP OAuth 2.1 — treat it like any other secret: server-side only, never a
+`VITE_` variable.
+
+### MCP OAuth 2.1 (the production path, now built)
+
+Beside the demo secret, the server now implements the OAuth 2.1 surface Alexa+
+reads before it will register an add-on (`src/oauth.ts`, MCP plan §21 Phase 1).
+It is dormant until `MCP_OAUTH_SECRET` is set; `/health` reports it under
+`oauth`.
+
+- **Discovery** — `GET /.well-known/oauth-protected-resource` (RFC 9728, plus a
+  `/mcp`-suffixed alias) and `GET /.well-known/oauth-authorization-server`. The
+  latter advertises `code_challenge_methods_supported: ["S256"]`, without which
+  the client refuses the flow.
+- **Tier 1 — `client_credentials`** (`scope=mcp:service`), for machine callers
+  that register the add-on, enumerate tools/resources and poll `/health`.
+  Tokens live at most 3600 s and carry **no refresh token**.
+- **Tier 2 — `authorization_code` + PKCE `S256`** (`mcp:tools` / `mcp:resources`),
+  entered only when a user-specific tool is first invoked. `/oauth/authorize`
+  validates `redirect_uri` against an exact allowlist **before** redirecting, so
+  it cannot be an open redirector. This build has no user directory, so it mints
+  a code bound to `MCP_OAUTH_USER_DEVICE_ID` and redirects — the honest limit of
+  this implementation, stated rather than dressed up.
+- **Tokens** are self-contained HMAC-SHA256-signed payloads, verified with no
+  store, so the surface survives a restart. `/mcp` accepts them the same way it
+  accepts the static bearer (`src/identity.ts`); the token's scoped device id
+  becomes the caller. Access tokens are never forwarded to PostgREST.
+
+Not supported (and none claimed): DCR, CIMD, OIDC, step-up auth, and a
+`WWW-Authenticate` header on the `/mcp` 401 — that reply is intentionally a
+plain body. The endpoints are exact; a wrong client secret is a `401
+invalid_client`, a reused code is a `400 invalid_grant`, and a failed PKCE
+check is a `400 invalid_grant`.
 
 ## Configuration
 
@@ -400,23 +494,34 @@ These are the names the process reads. In `infra/.env` the four origins carry th
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `POSTGREST_URL` | **yes** | API origin, e.g. `https://api.globie.earth`. The container refuses to start without it. Locally, compose defaults it to `http://rest:3000`. |
-| `STUDIO_URL` | no | Origin of the studio proxy, for `generate_soundscape`. Unset only disables that tool, which then explains itself. Locally, compose defaults it to `http://studio:8080`. |
+| `STUDIO_URL` | no | Origin of the studio proxy, for the soundscape tools. Unset only disables those tools, which then explain themselves. Locally, compose defaults it to `http://studio:8080`. |
 | `PODCAST_URL` | no | Origin of the podcast proxy, for the two podcast tools. Unset only disables those tools, which then explain themselves. Locally, compose defaults it to `http://podcast:8080`. |
+| `OPENMIND_API_URL` | no | Origin of the Openmind.Travel REST catalogue, for the 36 `om_*` travel tools. Defaults to `https://bokunapi.9o9.io`. Unset leaves the tools working at the default. |
 | `PORT` | no | Listen port. Defaults to `8080`, which is what the image exposes. |
 | `MCP_BEARER_TOKEN` | no | The demo static bearer. Unset disables the demo path. |
 | `MCP_DEMO_DEVICE_ID` | no | The uuid the demo token resolves to. Must exist in `api.devices`. |
+| `MCP_OAUTH_SECRET` | no | HMAC key for the OAuth 2.1 surface (`src/oauth.ts`). Unset leaves it dormant (`/health` shows `oauth.configured:false`). Generate with `openssl rand -hex 32`. |
+| `MCP_OAUTH_CLIENT_ID` / `MCP_OAUTH_CLIENT_SECRET` | no | The single registered OAuth client. Needed for Tier 1 `client_credentials` and checked (id only) at `/oauth/authorize`. |
+| `MCP_OAUTH_REDIRECT_URIS` | no | Comma-separated exact redirect-URI allowlist for the Tier 2 flow. Empty refuses every authorize (no open redirect). |
+| `MCP_OAUTH_USER_DEVICE_ID` | no | The uuid a Tier 2 user token is bound to. Falls back to `MCP_DEMO_DEVICE_ID`. |
+| `MCP_PUBLIC_URL` | no | Public origin used as the OAuth issuer and in the discovery docs. Unset derives it per request from `Host`. |
 | `MCP_CORS_ORIGINS` | no | Comma-separated literal origin list for browser clients. Non-browser MCP hosts send no `Origin` and are unaffected. |
 | `EMBEDDING_PROVIDER` | no | `local` (default), `bedrock` or `none`. `none` is a valid configuration, not a broken one — see below. |
 | `EMBEDDING_CACHE_DIR` | no | Where the local model's weights are cached. Defaults to `.cache`; the image sets it to `/app/.cache`. |
-| `BEDROCK_REGION` / `AWS_REGION` | no | Region for Bedrock. Either works. Only read by `EMBEDDING_PROVIDER=bedrock`. |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | no | Credentials for a service running off AWS. An instance role is the production path on AWS. |
+| `BEDROCK_REGION` / `AWS_REGION` | no | Region for Bedrock. Either works. Read by `EMBEDDING_PROVIDER=bedrock` and by any Nova-targeted model call. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | no | Credentials for a service running off AWS. An instance role is the production path on AWS. Needed by Titan embeddings and by any Nova-targeted call. |
+| `AWS_BEARER_TOKEN_BEDROCK` | no | Alternative to the key pair above: a Bedrock API key (the Bedrock console's *API keys* page). When set, the SDK signs with `httpBearerAuth` instead of SigV4. Set this **or** the pair above, not both. |
 | `DEEPSEEK_BASE_URL` | no | OpenAI-compatible base for the tool router (`POST /route`). Defaults to `https://api.deepseek.com/v1`. |
 | `DEEPSEEK_MODEL` | no | Default router model. Defaults to `deepseek-flash`; a caller may override it with an id from the router's allowlist (see *Tool router*). |
 | `DEEPSEEK_API_KEY` | no | Key for the tool router. Unset leaves `/route` a clear `503`; the MCP tools are unaffected. |
+| `NOVA_MODEL` | no | Bedrock Nova model id used by any Nova-targeted call. Defaults to `amazon.nova-pro-v1:0`. Reuses the Bedrock credentials above. |
+| `VISION_PROVIDER` | no | `deepseek` (default) or `nova`. Selects the provider for the two vision surfaces (`describe_photo`, `/contribute`). Read per request. |
 | `RERANK_ENABLED` | no | `true` (default) or `false`. Turns the `search_forest_knowledge` rerank stage on/off (MCP plan §16). |
+| `RERANK_PROVIDER` | no | `deepseek` (default) or `nova`. Selects the provider for the rerank pass. Read per request. |
 | `RERANK_POOL` | no | Candidate rows fetched before reranking, then sliced to 8. Defaults to `20`. |
 | `RERANK_TIMEOUT_MS` | no | Per-call budget for the rerank model. Defaults to `20000` (matches the router's upstream timeout; a live VPS→DeepSeek call measured ~9s); expiry falls back to the cosine order. |
-| `DEEPSEEK_RERANK_MODEL` | no | Model for the rerank pass. Defaults to `DEEPSEEK_MODEL`; needs no key of its own. |
+| `SEARCH_LATENCY_BUDGET_MS` | no | Latency ceiling for a whole search, in ms. When set and the rerank's own cap (`RERANK_TIMEOUT_MS`) exceeds it, the rerank is skipped outright and the in-process cosine order is returned, reporting `ranking: "cosine"` — the Alexa-facing path, whose round-trip must stay under 500 ms (MCP plan §20.3 gap 4 / §21 Phase 3). `0` or unset = no ceiling (the web client's case; a live call measured ~21 s end-to-end on 2026-10-15 when the ceiling was absent). |
+| `DEEPSEEK_RERANK_MODEL` | no | Model for the rerank pass when `RERANK_PROVIDER=deepseek`. Defaults to `DEEPSEEK_MODEL`; needs no key of its own. |
 | `MINIO_ENDPOINT` | no | S3-compatible origin for the media bucket, e.g. `http://minio:9000` locally. Unset disables `/contribute`, which then answers a clear `503`. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | no | Bucket credentials. **Server-side only** — never a `VITE_` variable, never sent to a browser. Unset disables `/contribute` (`503`). |
 | `MINIO_BUCKET` | no | The bucket photos are written to. Created with a public read policy on first upload. Defaults to the app's media bucket (`globie-media`). |
@@ -425,11 +530,11 @@ These are the names the process reads. In `infra/.env` the four origins carry th
 | `SPEECH_URL` | no | Origin of the speech service (Speaches: STT + TTS) for `/voice/*`. Unset leaves those routes a clear `503`; the MCP tools are unaffected. |
 | `SPEECH_STT_MODEL` | no | Speech-to-text model id. Defaults to the multilingual `Systran/faster-whisper-base`. |
 | `SPEECH_TTS_MODEL` | no | Text-to-speech model id. Defaults to `speaches-ai/Kokoro-82M-v1.0-ONNX`. |
-| `SPEECH_TTS_VOICE` | no | TTS voice id. Defaults to `af_heart`. |
+| `SPEECH_TTS_VOICE` | no | The Kokoro voice `/voice/speak` speaks with by default. The client may pick any id `/health` advertises under `speech.voices` instead. Defaults to `af_heart`. |
 
 The two media/speech feature groups fail closed and in isolation: an unset
 `MINIO_*` group disables only `/contribute`, and an unset `SPEECH_URL` disables
-only `/voice/*`. Neither affects the eleven MCP tools, and neither crashes the
+only `/voice/*`. Neither affects the MCP tools, and neither crashes the
 process — the server starts and reports what is unconfigured on `/health`.
 
 ### Embeddings
@@ -509,6 +614,11 @@ The script asserts that the handshake completes, that `tools/list` returns every
 tool it names, that the resources and prompts are listed and read, and that
 `tools/call` round-trips a real result. It uses `X-Device-Id`, so no demo token
 is needed.
+
+[RUNTIME-EVIDENCE.md](./RUNTIME-EVIDENCE.md) is a verbatim transcript of one such
+run — the SDK client above plus the browser host — captured as the repo-side
+proof the plan's §20 risk table asks for ("MCP named in README but never called"
+is an explicit disqualifier).
 
 ## Measure it, and what we learned
 

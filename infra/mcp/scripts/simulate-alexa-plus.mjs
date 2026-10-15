@@ -22,6 +22,15 @@
 // it, which proves the credential is enforced rather than decorative. That run
 // needs no real token.
 //
+// It also proves protocol negotiation. Alexa+'s MCP client advertises
+// protocolVersion "2025-03-26", while our server pins "2025-11-25" as its newest
+// (server.ts, REQUIRED_PROTOCOL_VERSION). The SDK's Client.connect() hardcodes
+// LATEST_PROTOCOL_VERSION in its initialize request, so this script rewrites
+// just that one field on the wire and asserts the version the server echoed
+// back - a down-negotiation, not a rejection. Override with MCP_PROTOCOL.
+//
+//   MCP_PROTOCOL=2025-11-25 node --env-file=../.env scripts/simulate-alexa-plus.mjs
+//
 // Exit 0 = the run behaved as expected, 2 = no token configured.
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -30,6 +39,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const URL_STRING = process.env.MCP_URL ?? 'https://mcp.globie.earth/mcp';
 const REAL_TOKEN = (process.env.MCP_BEARER_TOKEN ?? '').trim();
 const NEGATIVE = process.argv.includes('--negative');
+// The version this simulated host puts on the wire. Defaults to the version the
+// Alexa+ client advertises; the server is expected to negotiate down to it.
+const ADVERTISED_VERSION = (process.env.MCP_PROTOCOL ?? '2025-03-26').trim();
 
 /** Shows only enough of a secret to recognise it, never the whole value. */
 function redact(token) {
@@ -83,13 +95,31 @@ const transport = new StreamableHTTPClientTransport(new URL(URL_STRING), {
 });
 const client = new Client({ name: 'globie-alexa-plus-sim', version: '1.0.0' });
 
+// Client.connect() always advertises LATEST_PROTOCOL_VERSION, so rewrite that one
+// field of the initialize request in flight to ADVERTISED_VERSION. Everything else
+// the SDK sends is untouched; the transport then carries whatever the server
+// negotiated in the mcp-protocol-version header on every later request.
+const sendRequest = client.request.bind(client);
+client.request = (request, schema, options) => {
+  if (request?.method === 'initialize' && request.params) {
+    request.params.protocolVersion = ADVERTISED_VERSION;
+  }
+  return sendRequest(request, schema, options);
+};
+
 try {
   console.log('\n1. initialize');
   await client.connect(transport);
   const server = client.getServerVersion();
   const capabilities = Object.keys(client.getServerCapabilities() ?? {}).join(', ');
-  console.log(`   ← ${server?.name}@${server?.version}, protocol ${transport.protocolVersion}`);
+  const negotiated = transport.protocolVersion;
+  console.log(`   ← ${server?.name}@${server?.version}, protocol ${negotiated}`);
+  console.log(`   protocol  advertised ${ADVERTISED_VERSION} → negotiated ${negotiated}`);
   console.log(`   capabilities: ${capabilities}`);
+  if (negotiated !== ADVERTISED_VERSION) {
+    failures += 1;
+    console.error(`   ! expected the server to negotiate ${ADVERTISED_VERSION}, got ${negotiated}`);
+  }
 
   console.log('\n2. tools/list');
   const { tools } = await client.listTools();

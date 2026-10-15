@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<!--
+  The Globie Earth "card" MCP App (SEP-1865 / io.modelcontextprotocol/ui).
+
+  One archetype document, shared by every tool that answers with a single
+  object - describe_species, describe_photo, get_recipe, get_eco_balance,
+  adopt_species, generate_soundscape and get_soundscape. Which view to draw is
+  read from the host's own hostContext.toolInfo.tool.name (SEP-1865), so one
+  set of bytes serves every one of them; a host that omits toolInfo falls back
+  to inferring the view from the payload's own shape. src/ui/apps.ts holds the
+  tool -> archetype mapping, and its names must match the VIEWS keys below.
+
+  Self-contained apart from one declared origin: the freely-licensed Wikipedia
+  lead image is fetched from upload.wikimedia.org, which is exactly what
+  _meta.ui.csp.resourceDomains exists for (src/ui/apps.ts). Everything else -
+  script, style, fonts - is inline, so the host's restrictive default policy
+  still covers the document. A card with no image needs no network at all.
+
+  Authored at the Alexa+ design-guide's 768x480 base and scaled by one root
+  `zoom` (1.667 for the far-field Show 8/15, 1280x800) rather than per-element
+  pixel hacks. Light and dark are both first-class. Touch targets are >=48x48.
+-->
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Globie Earth</title>
+    <style>
+      :root {
+        /* One root scale for the whole surface; the host's container width
+           decides it (see applyHostContext). */
+        --ui-scale: 1;
+        /* Spacing: 2 / 6 / 8 / 12 / 16 / 20 / 24. */
+        --space-2: 2px;
+        --space-6: 6px;
+        --space-8: 8px;
+        --space-12: 12px;
+        --space-16: 16px;
+        --space-20: 20px;
+        --space-24: 24px;
+        /* Shape: 4 / 8 / 12 / 16 + shapeCircle. */
+        --shape-8: 8px;
+        --shape-12: 12px;
+        --shape-16: 16px;
+        --shape-circle: 9999px;
+        /* The touch-target floor the accessibility guide requires. */
+        --target: 48px;
+        /* Typography, at the 768x480 base. */
+        --font-display: 40px;
+        --font-headline: 20px;
+        --font-body: 14px;
+        --font-caption: 12px;
+        --font-label: 10px;
+        /* The widget is sized to the 768x480 authoring viewport; the host may
+           give it more room in fullscreen. */
+        --base-width: 768px;
+      }
+
+      /* Light and dark parity, keyed off hostContext.theme. Surfaces are the
+         guide's card tokens; text tones are picked for the required contrast
+         (>=4.5:1 under 18px, >=3:1 at or above). */
+      html[data-theme='dark'] {
+        --surface: #14181e;
+        --surface-inner: #1b2028;
+        --text: #f2f4f7;
+        --text-muted: #aab3c0;
+        --border: #2b323c;
+        --button: #2d415e;
+        --button-text: #eaf0f8;
+        --accent: #58c06a;
+      }
+      html[data-theme='light'] {
+        --surface: #ffffff;
+        --surface-inner: #faf9fb;
+        --text: #171b21;
+        --text-muted: #49515e;
+        --border: #e2e4ea;
+        --button: #2d415e;
+        --button-text: #ffffff;
+        --accent: #2e7d32;
+      }
+
+      html {
+        zoom: var(--ui-scale);
+        background: transparent;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+        font-size: var(--font-body);
+        line-height: 1.35;
+      }
+
+      .card {
+        box-sizing: border-box;
+        width: var(--base-width);
+        max-width: 100%;
+        padding: var(--space-20);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-16);
+        background: var(--surface);
+      }
+
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-12);
+      }
+      .mark {
+        display: flex;
+        align-items: center;
+        gap: var(--space-8);
+        min-width: 0;
+      }
+      .leaf {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: var(--shape-circle);
+        background: var(--accent);
+      }
+      .brand {
+        font-size: var(--font-label);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+      .title {
+        margin: var(--space-2) 0 0;
+        font-size: var(--font-headline);
+        font-weight: 600;
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+
+      /* 48x48 minimum, whatever the label says. */
+      .toggle,
+      .action {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-6);
+        min-width: var(--target);
+        min-height: var(--target);
+        padding: 0 var(--space-16);
+        border: 0;
+        border-radius: var(--shape-12);
+        background: var(--button);
+        color: var(--button-text);
+        font: inherit;
+        font-size: var(--font-caption);
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .toggle[hidden],
+      .action[hidden] {
+        display: none;
+      }
+      .toggle:focus-visible,
+      .action:focus-visible {
+        outline: 3px solid var(--text);
+        outline-offset: 2px;
+      }
+      .action {
+        margin-top: var(--space-16);
+      }
+
+      .hero {
+        display: block;
+        width: 100%;
+        max-height: 240px;
+        margin-top: var(--space-16);
+        border-radius: var(--shape-12);
+        object-fit: cover;
+        background: var(--surface-inner);
+      }
+      .hero[hidden] {
+        display: none;
+      }
+
+      .body {
+        margin: var(--space-16) 0 0;
+        font-size: var(--font-body);
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+      .body[hidden] {
+        display: none;
+      }
+
+      .big {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-8);
+        margin-top: var(--space-20);
+      }
+      .big[hidden] {
+        display: none;
+      }
+      .big-value {
+        font-size: var(--font-display);
+        font-weight: 600;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      .big-label {
+        font-size: var(--font-body);
+        color: var(--text-muted);
+      }
+
+      .facts {
+        margin: var(--space-16) 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .fact {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: var(--space-16);
+        padding: var(--space-12) 0;
+        border-top: 1px solid var(--border);
+      }
+      .fact-label {
+        font-size: var(--font-body);
+        color: var(--text-muted);
+      }
+      .fact-value {
+        font-size: var(--font-body);
+        font-weight: 600;
+        color: var(--text);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+      }
+
+      .section-title {
+        margin: var(--space-20) 0 0;
+        font-size: var(--font-caption);
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-8);
+        margin: var(--space-8) 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .chip {
+        padding: var(--space-6) var(--space-12);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-circle);
+        background: var(--surface-inner);
+        font-size: var(--font-caption);
+        color: var(--text);
+      }
+      .steps {
+        margin: var(--space-8) 0 0;
+        padding-left: var(--space-20);
+      }
+      .steps li {
+        margin: var(--space-8) 0;
+        font-size: var(--font-body);
+        color: var(--text);
+      }
+      .step-minutes {
+        color: var(--text-muted);
+      }
+      .chips[hidden],
+      .steps[hidden],
+      .section-title[hidden] {
+        display: none;
+      }
+
+      .note {
+        margin: var(--space-16) 0 0;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+        overflow-wrap: anywhere;
+      }
+      .note[hidden] {
+        display: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" id="card">
+      <div class="head">
+        <div class="mark">
+          <span class="leaf" aria-hidden="true"></span>
+          <div>
+            <div class="brand">Globie Earth</div>
+            <h1 class="title" id="heading">One moment…</h1>
+          </div>
+        </div>
+        <!-- Shown only when the host offers both inline and fullscreen. -->
+        <button class="toggle" id="toggle" type="button" hidden aria-label="Expand to fullscreen">
+          Fullscreen
+        </button>
+      </div>
+
+      <img class="hero" id="hero" alt="" hidden />
+      <p class="body" id="body" hidden></p>
+      <div class="big" id="big" hidden>
+        <span class="big-value" id="big-value"></span>
+        <span class="big-label" id="big-label"></span>
+      </div>
+      <ul class="facts" id="facts" aria-live="polite"></ul>
+      <h2 class="section-title" id="ingredients-title" hidden>Ingredients</h2>
+      <ul class="chips" id="ingredients" hidden></ul>
+      <h2 class="section-title" id="steps-title" hidden>Method</h2>
+      <ol class="steps" id="steps" hidden></ol>
+      <button class="action" id="action" type="button" hidden></button>
+      <p class="note" id="note" hidden></p>
+    </main>
+
+    <script>
+      (function () {
+        'use strict';
+
+        var APP_INFO = { name: 'globie-earth-card', version: '1.0.0' };
+        var root = document.documentElement;
+        var card = document.getElementById('card');
+        var headingEl = document.getElementById('heading');
+        var toggle = document.getElementById('toggle');
+        var heroEl = document.getElementById('hero');
+        var bodyEl = document.getElementById('body');
+        var bigEl = document.getElementById('big');
+        var bigValueEl = document.getElementById('big-value');
+        var bigLabelEl = document.getElementById('big-label');
+        var factsEl = document.getElementById('facts');
+        var ingredientsTitleEl = document.getElementById('ingredients-title');
+        var ingredientsEl = document.getElementById('ingredients');
+        var stepsTitleEl = document.getElementById('steps-title');
+        var stepsEl = document.getElementById('steps');
+        var actionEl = document.getElementById('action');
+        var noteEl = document.getElementById('note');
+
+        // Alt text is bounded to 125 characters by the design guide, so a long
+        // article title can never push a description past the limit.
+        var ALT_MAX = 125;
+        // The view the payload belongs to, and its last known result: a host
+        // may send a tool result before it has sent the tool's identity.
+        var view = null;
+        var latest = null;
+        var actionUrl = null;
+
+        // ---- The postMessage JSON-RPC 2.0 bridge (SEP-1865) ------------------
+        // The view is a sandboxed, possibly opaque-origin iframe: the host frame
+        // is the only peer and postMessage is the only channel. No origin can be
+        // verified against, so messages from any frame other than our parent are
+        // ignored outright.
+        var nextId = 1;
+        var pending = Object.create(null);
+
+        function postToHost(message) {
+          window.parent.postMessage(message, '*');
+        }
+
+        function request(method, params) {
+          var id = 'globie-' + nextId++;
+          return new Promise(function (resolve) {
+            pending[id] = resolve;
+            postToHost({ jsonrpc: '2.0', id: id, method: method, params: params });
+            // A host that never answers must not leave the view hanging; the
+            // placeholder stays legible and the promise simply never settles.
+          });
+        }
+
+        function notifyHost(method, params) {
+          postToHost({ jsonrpc: '2.0', method: method, params: params });
+        }
+
+        // ---- Size reporting --------------------------------------------------
+        // The host sizes the frame from what we report; report only on a real
+        // change so a resize in response cannot ping-pong.
+        var lastSize = '';
+        function reportSize() {
+          var size = Math.ceil(root.scrollWidth) + 'x' + Math.ceil(root.scrollHeight);
+          if (size === lastSize) return;
+          lastSize = size;
+          notifyHost('ui/notifications/size-changed', {
+            width: Math.ceil(root.scrollWidth),
+            height: Math.ceil(root.scrollHeight),
+          });
+        }
+
+        // ---- hostContext -----------------------------------------------------
+        var currentMode = 'inline';
+
+        function applyHostContext(context) {
+          if (!context) return;
+          if (context.theme === 'light' || context.theme === 'dark') {
+            root.setAttribute('data-theme', context.theme);
+          }
+          // One root scale, never per-element: author at 768x480, zoom 1.667 for
+          // the far-field Show 8/15 (1280x800). Everything inside inherits it.
+          var dimensions = context.containerDimensions || {};
+          var width = dimensions.maxWidth || dimensions.width || 0;
+          root.style.setProperty('--ui-scale', width >= 1024 ? '1.667' : '1');
+
+          currentMode = context.displayMode || 'inline';
+          var modes = context.availableDisplayModes || [];
+          // We only offer the expand control when the host actually has both
+          // modes to switch between.
+          toggle.hidden = !(modes.indexOf('inline') !== -1 && modes.indexOf('fullscreen') !== -1);
+          updateToggleLabel();
+          rememberToolName(context);
+          reportSize();
+        }
+
+        // The host names the tool this view is showing. It is the only thing
+        // that tells one shared card apart from another, so it is read first
+        // and the payload's shape is only the fallback.
+        function rememberToolName(context) {
+          var tool = context && context.toolInfo && context.toolInfo.tool;
+          var name = tool && typeof tool.name === 'string' ? tool.name : null;
+          if (name && VIEWS[name]) {
+            view = name;
+            if (latest) render(latest);
+          }
+        }
+
+        function updateToggleLabel() {
+          var expand = currentMode !== 'fullscreen';
+          toggle.textContent = expand ? 'Fullscreen' : 'Exit';
+          toggle.setAttribute(
+            'aria-label',
+            expand ? 'Expand to fullscreen' : 'Exit fullscreen',
+          );
+        }
+
+        // ---- Small DOM helpers ----------------------------------------------
+        function el(tag, className, text) {
+          var node = document.createElement(tag);
+          if (className) node.className = className;
+          if (text !== undefined && text !== null && text !== '') {
+            // textContent, never innerHTML: nothing the server returns is markup.
+            node.appendChild(document.createTextNode(String(text)));
+          }
+          return node;
+        }
+
+        function present(value) {
+          return value !== null && value !== undefined && value !== '';
+        }
+
+        /** `1234` -> `1,234`; passes anything non-numeric through untouched. */
+        function group(value) {
+          if (typeof value !== 'number' || !isFinite(value)) return value;
+          return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+
+        function truncate(value, max) {
+          var text = String(value);
+          return text.length > max ? text.slice(0, max - 1) + '…' : text;
+        }
+
+        function fact(label, value) {
+          var row = el('li', 'fact');
+          row.appendChild(el('span', 'fact-label', label));
+          row.appendChild(el('span', 'fact-value', String(value)));
+          return row;
+        }
+
+        function facts(rows) {
+          var items = [];
+          for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            if (row && row.length === 2 && present(row[1])) items.push(fact(row[0], row[1]));
+          }
+          return items;
+        }
+
+        function setText(node, value) {
+          node.textContent = present(value) ? String(value) : '';
+          node.hidden = !present(value);
+        }
+
+        function openLink(url) {
+          if (!url) return;
+          request('ui/open-link', { url: url });
+        }
+
+        // ---- The views -------------------------------------------------------
+        // Each view draws one tool's result. A shared card keeps its own chrome
+        // and only the middle changes, which is what lets seven tools share one
+        // document.
+
+        var VIEWS = {
+          describe_species: function (payload) {
+            headingEl.textContent = payload.title || 'Species';
+            var image = payload.image || null;
+            if (image && image.url) {
+              heroEl.src = image.url;
+              heroEl.alt = truncate('Lead image for ' + (payload.title || 'this species'), ALT_MAX);
+              heroEl.hidden = false;
+            }
+            setText(bodyEl, payload.extract);
+            var rows = [];
+            if (image && image.credit) rows.push(['Image credit', image.credit]);
+            if (image && image.license) rows.push(['Image licence', image.license]);
+            rows.push(['Source', payload.source]);
+            factsEl.replaceChildren.apply(factsEl, facts(rows));
+            actionUrl = payload.url || (image && image.descriptionUrl) || null;
+            actionEl.textContent = 'Read on Wikipedia';
+            actionEl.hidden = !actionUrl;
+            setText(noteEl, payload.license);
+          },
+
+          describe_photo: function (payload) {
+            headingEl.textContent = 'Photo reading';
+            setText(bodyEl, payload.description);
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([['Question', payload.question], ['Model', payload.model]]),
+            );
+            actionEl.hidden = true;
+            setText(noteEl, payload.source);
+          },
+
+          get_recipe: function (payload) {
+            headingEl.textContent = payload.nameEn || payload.nameLocal || 'Recipe';
+            setText(bodyEl, payload.description);
+            var time = present(payload.totalMinutes) ? payload.totalMinutes + ' minutes' : null;
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([
+                ['Also called', payload.nameLocal],
+                ['Region', payload.region],
+                ['Course', payload.category],
+                ['Serves', payload.servings],
+                ['Total time', time],
+              ]),
+            );
+
+            var ingredients = Array.isArray(payload.ingredients) ? payload.ingredients : [];
+            ingredientsTitleEl.hidden = ingredients.length === 0;
+            ingredientsEl.hidden = ingredients.length === 0;
+            var chips = [];
+            for (var i = 0; i < ingredients.length; i++) chips.push(el('li', 'chip', ingredients[i]));
+            ingredientsEl.replaceChildren.apply(ingredientsEl, chips);
+
+            var steps = Array.isArray(payload.steps) ? payload.steps : [];
+            stepsTitleEl.hidden = steps.length === 0;
+            stepsEl.hidden = steps.length === 0;
+            var items = [];
+            for (var s = 0; s < steps.length; s++) {
+              var step = steps[s] || {};
+              var li = el('li', null, step.detail);
+              if (present(step.minutes)) {
+                li.appendChild(el('span', 'step-minutes', ' · ' + step.minutes + ' min'));
+              }
+              items.push(li);
+            }
+            stepsEl.replaceChildren.apply(stepsEl, items);
+
+            actionUrl = payload.sourceUrl || null;
+            actionEl.textContent = 'Open the source';
+            actionEl.hidden = !actionUrl;
+            var note = [payload.source, payload.license].filter(present).join(' · ');
+            if (Array.isArray(payload.tips) && payload.tips.length) {
+              note = (note ? note + ' — ' : '') + payload.tips.join(' ');
+            }
+            setText(noteEl, note);
+          },
+
+          get_eco_balance: function (payload) {
+            headingEl.textContent = 'Eco balance';
+            bigValueEl.textContent = group(payload.balance);
+            bigLabelEl.textContent = 'eco-tokens';
+            bigEl.hidden = false;
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([['Earned per sapling', group(payload.tokensPerSapling) + ' tokens']]),
+            );
+            actionEl.hidden = true;
+            setText(noteEl, payload.note);
+          },
+
+          adopt_species: function (payload) {
+            var deed = payload.deed || {};
+            headingEl.textContent = deed.deedNo ? 'Living Deed ' + deed.deedNo : 'Living Deed';
+            var stages = Array.isArray(deed.stages) ? deed.stages : [];
+            var stage = present(deed.stageIndex) ? stages[deed.stageIndex] : null;
+            var progress = present(deed.progressPct) ? deed.progressPct + '%' : null;
+            var offset = present(deed.co2OffsetKg) ? group(deed.co2OffsetKg) + ' kg' : null;
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([
+                ['Species', deed.speciesId],
+                ['Saplings', deed.treesPlanted],
+                ['Stage', stage ? stage + (progress ? ' · ' + progress : '') : progress],
+                ['CO₂ offset', offset],
+                ['Eco-tokens earned', group(payload.tokensAwarded)],
+                ['Balance', group(payload.balance)],
+                ['Issued', deed.issuedAt],
+              ]),
+            );
+            actionEl.hidden = true;
+            setText(noteEl, payload.note);
+          },
+
+          generate_soundscape: function (payload) {
+            headingEl.textContent = 'Soundscape queued';
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([['Track', payload.trackId], ['Status', payload.status]]),
+            );
+            actionEl.hidden = true;
+            setText(noteEl, payload.note);
+          },
+
+          get_soundscape: function (payload) {
+            headingEl.textContent = payload.title || 'Soundscape';
+            var length = present(payload.durationSec) ? payload.durationSec + ' seconds' : null;
+            factsEl.replaceChildren.apply(
+              factsEl,
+              facts([['Track', payload.trackId], ['Status', payload.status], ['Length', length]]),
+            );
+            actionUrl = payload.status === 'ready' ? payload.audioUrl || null : null;
+            actionEl.textContent = 'Open the soundscape';
+            actionEl.hidden = !actionUrl;
+            var note = payload.error;
+            if (!note && payload.status !== 'ready') {
+              note = 'Still rendering — the audio does not exist yet.';
+            }
+            setText(noteEl, note);
+          },
+        };
+
+        // When the host never names the tool, the payload's own shape still
+        // says which view it is: every card tool carries a distinct key set.
+        function inferView(payload) {
+          if (!payload || typeof payload !== 'object') return null;
+          if (payload.deed) return 'adopt_species';
+          if (Array.isArray(payload.ingredients)) return 'get_recipe';
+          if ('extract' in payload) return 'describe_species';
+          if ('trackId' in payload) {
+            return 'status' in payload && 'audioUrl' in payload ? 'get_soundscape' : 'generate_soundscape';
+          }
+          if ('balance' in payload) return 'get_eco_balance';
+          if ('description' in payload && 'model' in payload) return 'describe_photo';
+          return null;
+        }
+
+        // ---- The tool result -------------------------------------------------
+        // The host forwards the CallToolResult as ui/notifications/tool-result.
+        // structuredContent is read directly; a host that only forwards the text
+        // block gets the same fields parsed back out of it.
+        function extractPayload(params) {
+          if (!params) return null;
+          if (params.structuredContent) return params.structuredContent;
+          var block = Array.isArray(params.content) ? params.content[0] : null;
+          if (block && block.type === 'text') {
+            try {
+              return JSON.parse(block.text);
+            } catch (error) {
+              return null;
+            }
+          }
+          return null;
+        }
+
+        function reset() {
+          heroEl.hidden = true;
+          heroEl.removeAttribute('src');
+          heroEl.alt = '';
+          bodyEl.hidden = true;
+          bigEl.hidden = true;
+          ingredientsTitleEl.hidden = true;
+          ingredientsEl.hidden = true;
+          stepsTitleEl.hidden = true;
+          stepsEl.hidden = true;
+          actionEl.hidden = true;
+          noteEl.hidden = true;
+          actionUrl = null;
+          factsEl.replaceChildren();
+        }
+
+        function render(payload) {
+          if (!payload) return;
+          latest = payload;
+          var name = view || inferView(payload);
+          var draw = name ? VIEWS[name] : null;
+          reset();
+          if (!draw) {
+            // A card document pointed at something it does not know how to
+            // draw: show the JSON's own keys rather than an empty shell.
+            headingEl.textContent = 'Result';
+            var keys = [];
+            for (var key in payload) {
+              if (Object.prototype.hasOwnProperty.call(payload, key)) keys.push([key, payload[key]]);
+            }
+            factsEl.replaceChildren.apply(factsEl, facts(keys));
+            reportSize();
+            return;
+          }
+          headingEl.textContent = '';
+          draw(payload);
+          reportSize();
+        }
+
+        function showPlaceholder(message) {
+          reset();
+          headingEl.textContent = 'One moment…';
+          factsEl.replaceChildren.apply(factsEl, facts([['Working', message || 'Please wait.']]));
+          reportSize();
+        }
+
+        // ---- Host messages ---------------------------------------------------
+        window.addEventListener('message', function (event) {
+          // Only the parent frame is a peer.
+          if (event.source !== window.parent) return;
+          var message = event.data;
+          if (!message || message.jsonrpc !== '2.0') return;
+
+          if (message.id !== undefined && pending[message.id]) {
+            var settle = pending[message.id];
+            delete pending[message.id];
+            settle(message.result);
+            return;
+          }
+
+          switch (message.method) {
+            case 'ui/notifications/tool-input':
+              showPlaceholder('Drawing the card…');
+              break;
+            case 'ui/notifications/tool-result':
+              render(extractPayload(message.params));
+              break;
+            case 'ui/notifications/tool-cancelled':
+              showPlaceholder('That call was cancelled.');
+              break;
+            case 'ui/notifications/host-context-changed':
+              applyHostContext(message.params);
+              break;
+            case 'ui/resource-teardown':
+              // The host is closing the view; nothing is held open.
+              break;
+            default:
+              break;
+          }
+        });
+
+        heroEl.addEventListener('error', function () {
+          // An image the host's CSP refused, or one that is simply gone: the
+          // text stands alone rather than leaving a broken frame behind.
+          heroEl.hidden = true;
+        });
+
+        actionEl.addEventListener('click', function () {
+          openLink(actionUrl);
+        });
+
+        toggle.addEventListener('click', function () {
+          var target = currentMode === 'fullscreen' ? 'inline' : 'fullscreen';
+          // SEP-1865 names this parameter `mode`, and answers with the mode it
+          // actually set - which may differ from the one requested.
+          request('ui/request-display-mode', { mode: target }).then(function (result) {
+            currentMode = (result && result.mode) || target;
+            updateToggleLabel();
+            reportSize();
+          });
+        });
+
+        // Any layout change - the host's zoom, a wrap, a font swap - is reported
+        // to the host so the frame never clips the card.
+        if ('ResizeObserver' in window) {
+          new ResizeObserver(reportSize).observe(card);
+        }
+
+        // ---- Handshake -------------------------------------------------------
+        // ui/initialize, then ui/notifications/initialized. The host answers with
+        // our hostContext (which names the tool, and so the view); failure just
+        // leaves the placeholder up.
+        request('ui/initialize', {
+          appInfo: APP_INFO,
+          appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+        })
+          .then(function (result) {
+            applyHostContext(result && result.hostContext);
+            notifyHost('ui/notifications/initialized', {});
+          })
+          .catch(function () {
+            /* no host: stay on the placeholder */
+          })
+          .then(reportSize);
+      })();
+    </script>
+  </body>
+</html>

@@ -9,6 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { fetchWikiSummary } from '../wiki.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 export function registerWikiTools(server: McpServer): void {
@@ -35,6 +36,7 @@ export function registerWikiTools(server: McpServer): void {
           ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('describe_species') } },
     },
     async ({ name }) => {
       try {
@@ -71,6 +73,11 @@ export function registerWikiTools(server: McpServer): void {
             source: 'Wikipedia (CC BY-SA 4.0) - external reference, may be unverified',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('describe_species'),
+            invoking: 'Looking up the species…',
+            invoked: summary.title,
+          },
         );
       } catch (error) {
         return errorResult(error);

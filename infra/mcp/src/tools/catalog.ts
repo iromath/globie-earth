@@ -11,6 +11,7 @@ import { getEmbeddingProvider } from '../embed.js';
 import type { Caller } from '../identity.js';
 import { get, rpc } from '../postgrest.js';
 import { rerankConfig, rerankHits } from '../rerank.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 /** One catalogue hit. `similarity` is cosine similarity, 0..1. */
@@ -140,59 +141,6 @@ interface KeywordHit {
   content: string;
   matchedTerms: string[];
   score: number;
-}
-
-/**
- * Which surface a hit came from. `globie` is the app's own catalogue; `dnp` is
- * external Department of National Parks reference data - the biodiversity
- * survey (dnp_species), the national plant checklist (dnp_plant), the
- * national-park fauna observations (dnp_fauna) and the national wildlife
- * checklist (dnp_wildlife) - kept apart so a listener is never told a reference
- * record is something they can adopt.
- */
-function hitSource(entityType: string): 'globie' | 'dnp' {
-  return entityType.startsWith('dnp_') ? 'dnp' : 'globie';
-}
-
-/**
- * What to say about where a passage came from, for the ear. The search covers
- * Globie's own catalogue and four DNP reference datasets in one space, so an
- * answer is only honest if the listener is told which side it came from - and
- * "Ask the forest by voice" reads this aloud, where a silent source has a
- * listener believing a DNP survey row is Globie's own data (plan §17.1). All
- * four DNP kinds are named; naming only two used to leave dnp_fauna and
- * dnp_wildlife answers sounding like catalogue entries.
- */
-function sourceSentence(entityType: string): string {
-  switch (entityType) {
-    case 'dnp_species':
-      return "This comes from the DNP biodiversity survey, external reference data rather than Globie's own catalogue.";
-    case 'dnp_plant':
-      return "This comes from the DNP national plant checklist, external reference data rather than Globie's own catalogue.";
-    case 'dnp_fauna':
-      return "This comes from the DNP park fauna observations, external reference data rather than Globie's own catalogue.";
-    case 'dnp_wildlife':
-      return "This comes from the DNP national wildlife checklist, external reference data rather than Globie's own catalogue.";
-    default:
-      return "This comes from Globie's own catalogue.";
-  }
-}
-
-/**
- * One spoken sentence naming the best DNP hit when the closest passage is not
- * itself DNP, so DNP data the search returned is never silent just because a
- * Globie row ranked first (plan §17.2). Empty when the closest hit is DNP (its
- * own provenance already says so) or when no DNP row was returned.
- */
-function dnpAside(
-  closest: { entity_type?: string; entityType?: string; title: string; content: string },
-  pool: Array<{ entity_type?: string; entityType?: string; title: string; content: string }>,
-): string {
-  const typeOf = (row: { entity_type?: string; entityType?: string }) =>
-    row.entity_type ?? row.entityType ?? '';
-  const best = pool.find((row) => hitSource(typeOf(row)) === 'dnp');
-  if (!best || hitSource(typeOf(closest)) === 'dnp') return '';
-  return ` The DNP reference data also has ${best.title}: ${best.content}`;
 }
 
 /**
@@ -533,18 +481,16 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
     {
       title: 'Search the forest knowledge base',
       description:
-        'Search the forest knowledge base: Globie Earth\'s own catalogue (native species, ' +
-        'sanctuary sites, guardian lore) together with the Thai Department of National ' +
-        'Parks open data - the protected-area biodiversity survey, the national plant ' +
-        'checklist (with English common names, genus, synonyms and native status resolved ' +
-        'from GBIF), the national-park fauna observations, and the national wildlife ' +
-        'checklist with its statutory protected/reserved status - kept as external ' +
-        'reference data under the Open Data Common licence. Use this for any factual ' +
-        'question about the forest, its trees, its guardians, what was recorded growing or ' +
-        'living in a protected area, which animals are protected by Thai law, or what a ' +
-        'species is called. Returns passages ranked by relevance, each with the entity it ' +
-        'belongs to and a `source` of `globie` (adoptable catalogue) or `dnp` (external ' +
-        'reference). The `ranking` field says how the order was produced: `reranked` when an ' +
+        'Search the forest knowledge base: Globie Earth\'s own catalogue of native species, ' +
+        'sanctuary sites and guardian lore, together with its broader forest datasets - the ' +
+        'protected-area biodiversity survey, the national plant checklist (with English ' +
+        'common names, genus, synonyms and native status resolved from GBIF), the ' +
+        'national-park fauna observations, and the national wildlife checklist with its ' +
+        'statutory protected/reserved status. Use this for any factual question about the ' +
+        'forest, its trees, its guardians, what was recorded growing or living in a ' +
+        'protected area, which animals are protected by Thai law, or what a species is ' +
+        'called. Returns passages ranked by relevance, each with the entity it belongs to. ' +
+        'The `ranking` field says how the order was produced: `reranked` when an ' +
         'AI pass reordered the candidates, `cosine` when it is the raw similarity order. ' +
         'When the server has no embedding provider configured it answers with ' +
         'keyword matches over the same text and says so. Read-only.',
@@ -566,17 +512,20 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
           ])
           .optional()
           .describe(
-            'Restrict results to one kind of entry. The `dnp_*` types are external ' +
-              'reference data: `dnp_species` is the survey, `dnp_plant` the national plant ' +
-              'checklist, `dnp_fauna` the national-park fauna observations, and ' +
-              '`dnp_wildlife` the national wildlife checklist. Omit to search all. Set ' +
-              'this only when the listener explicitly asked to restrict to that kind: a ' +
-              'filter also hides the best answer when it lives in another kind - asked ' +
-              'for "Yang na" with `dnp_species` set, the tree named Yang Na in the ' +
-              'catalogue is skipped and only butterfly survey rows come back.',
+            'Restrict results to one kind of entry. On top of the species, site and guardian ' +
+              'kinds, Globie Earth\'s forest datasets add: `dnp_species`, the biodiversity ' +
+              'survey; `dnp_plant`, the national plant checklist; `dnp_fauna`, the ' +
+              'national-park fauna observations; and `dnp_wildlife`, the national wildlife ' +
+              'checklist. Omit to search all. Set ' +
+              'this only when the listener explicitly ' +
+              'asked to restrict to that kind: a filter also hides the best answer when it ' +
+              'lives in another kind - asked for "Yang na" with `dnp_species` set, the tree ' +
+              'named Yang Na in the catalogue is skipped and only butterfly survey rows ' +
+              'come back.',
           ),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: uiUriForTool('search_forest_knowledge') } },
     },
     async ({ query, entity_type }) => {
       try {
@@ -590,7 +539,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         const keywordAnswer = async (reason: string) => {
           const hits = await keywordSearch(query, entity_type, caller);
           const spoken = hits.length
-            ? `I found ${hits.length} keyword ${hits.length === 1 ? 'match' : 'matches'} for "${query}". The closest is ${hits[0].title}: ${hits[0].content} ${sourceSentence(hits[0].entityType)}${dnpAside(hits[0], hits)} These are keyword matches over the catalogue text, not vector similarity.`
+            ? `I found ${hits.length} keyword ${hits.length === 1 ? 'match' : 'matches'} for "${query}". The closest is ${hits[0].title}: ${hits[0].content} These are keyword matches over the catalogue text, not vector similarity.`
             : `I found no match for "${query}" in the forest knowledge. Try a plainer word or a species name.`;
           return jsonResult(
             {
@@ -601,9 +550,14 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
               note: hits.length
                 ? `${reason} These are keyword matches over the catalogue text, not vector similarity.`
                 : `${reason} No catalogue entry matched those keywords, so try a plainer word or name.`,
-              hits: hits.map((hit) => ({ ...hit, source: hitSource(hit.entityType) })),
+              hits: hits.map((hit) => ({ ...hit })),
             },
             spoken,
+            {
+              resourceUri: uiUriForTool('search_forest_knowledge'),
+              invoking: 'Searching the forest knowledge…',
+              invoked: 'Forest knowledge',
+            },
           );
         };
 
@@ -627,7 +581,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         }
 
         const rerank = rerankConfig();
-        const hits = await rpc<HitRow[]>(
+        const rows = await rpc<HitRow[]>(
           'catalog_search',
           {
             // PostgREST casts the JSON string to the vector type (see api.ts).
@@ -648,6 +602,12 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
           caller,
         );
 
+        // Recipes are not forest knowledge: they live in their own Local Culture
+        // tool (search_local_culture). The flat embedding space can still place
+        // a dish near a forest question, so drop any recipe row the unfiltered
+        // search surfaced rather than answering a forest question with a dish.
+        const hits = rows.filter((row) => row.entity_type !== 'recipe');
+
         // Reorder the pool by how directly each passage answers the question.
         // The reranker only reorders rows the database returned; when it is off
         // or fails, the cosine order stands and `ranking` says so honestly.
@@ -664,12 +624,8 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         }
         const top = ranked.slice(0, SEARCH_RESULTS);
 
-        // The ear is told where the closest passage came from, and - when the
-        // closest is not DNP but a DNP row answered too - that the DNP data is
-        // in the answer, so a DNP row is never silent behind a catalogue hit
-        // (plan §17.1-17.2).
         const spoken = top.length
-          ? `I found ${top.length} ${top.length === 1 ? 'passage' : 'passages'} for "${query}". The closest is ${top[0].title}: ${top[0].content} ${sourceSentence(top[0].entity_type)}${dnpAside(top[0], top)}`
+          ? `I found ${top.length} ${top.length === 1 ? 'passage' : 'passages'} for "${query}". The closest is ${top[0].title}: ${top[0].content}`
           : `I found nothing in the forest knowledge for "${query}".`;
 
         return jsonResult(
@@ -686,13 +642,17 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
             hits: top.map((row) => ({
               entityType: row.entity_type,
               entityId: row.entity_id,
-              source: hitSource(row.entity_type),
               title: row.title,
               content: row.content,
               similarity: row.similarity,
             })),
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('search_forest_knowledge'),
+            invoking: 'Searching the forest knowledge…',
+            invoked: 'Forest knowledge',
+          },
         );
       } catch (error) {
         return errorResult(error);
@@ -718,6 +678,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
           .describe('How many species to return. Defaults to 3.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: uiUriForTool('recommend_species') } },
     },
     async ({ match_count }) => {
       try {
@@ -746,6 +707,11 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
               : 'No recommendations yet: this is based on species the caller has already adopted, and the catalogue must be embedded.',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('recommend_species'),
+            invoking: 'Choosing species for you…',
+            invoked: 'Species recommendations',
+          },
         );
       } catch (error) {
         return errorResult(error);

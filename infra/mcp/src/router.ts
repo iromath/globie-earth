@@ -13,15 +13,31 @@
 // request keeps a missing key a clear 503 rather than a boot failure, exactly
 // as EMBEDDING_PROVIDER=none keeps semantic search a valid configuration.
 //
-// A caller may name a model from ROUTER_MODELS in deepseek.ts - the host's
-// dropdown offers the same ids - and, with the vision model, attach an image the
-// model reads alongside the utterance. Only ids on that list are ever forwarded,
-// and the key stays here: the page still holds no credential, only a model name.
+// A caller may name a model from ROUTER_MODELS in llm.ts - the host's dropdown
+// offers the same ids - and, with a vision model, attach an image it reads
+// alongside the utterance. Each id carries its own provider (DeepSeek or Amazon
+// Bedrock Nova), so one call can go to either. Only ids on that list are ever
+// forwarded, and the keys stay here: the page still holds no credential, only a
+// model name.
 
 import type { FastifyInstance } from 'fastify';
 
-import { isImageInput, modelSpec, ROUTER_MODELS, VISION_MODEL, deepseekConfig, type RouterModel } from './deepseek.js';
+import { deepseekConfig } from './deepseek.js';
 import { resolveCaller } from './identity.js';
+import {
+  chat,
+  isImageInput,
+  LlmError,
+  modelSpec,
+  providerConfigured,
+  ROUTER_MODELS,
+  VISION_MODEL,
+  type LlmPart,
+  type LlmProvider,
+  type LlmResult,
+  type LlmTool,
+  type RouterModel,
+} from './llm.js';
 
 /** One tool as tools/list advertises it, trimmed to what the router needs. */
 interface AdvertisedTool {
@@ -40,10 +56,19 @@ interface RouteDecision {
 /** How long the upstream model may take before the route gives up. */
 const TIMEOUT_MS = 20_000;
 
-/** Whether the route can serve, and which models it offers - for /health. */
+/**
+ * Whether the route can serve, and which models it offers - for /health. The
+ * route can serve when *either* provider is configured: each offered id names
+ * the provider it goes to, so a DeepSeek-key-only or a Nova-only environment
+ * still answers for the ids on its side.
+ */
 export function routerHealth(): { configured: boolean; model: string; models: RouterModel[] } {
-  const { model, apiKey } = deepseekConfig();
-  return { configured: apiKey !== null, model, models: [...ROUTER_MODELS] };
+  const { model } = deepseekConfig();
+  return {
+    configured: providerConfigured('deepseek') || providerConfigured('nova'),
+    model,
+    models: [...ROUTER_MODELS],
+  };
 }
 
 const SYSTEM_PROMPT_BASE = [
@@ -60,15 +85,15 @@ const SYSTEM_PROMPT_BASE = [
   'Set an optional filter argument (such as entity_type) only when the listener\'s own ' +
     'words name that kind of entry - e.g. "only butterflies", "just the plant ' +
     'checklist", "show me the sites". Otherwise leave every optional argument out.',
-  // The DNP entity_type values are otherwise opaque to a spoken question, so a
-  // listener asking for "the plant checklist" or "the wildlife checklist" gets
-  // no signal that those datasets have a name. Spelling the mapping out here is
-  // safe because it stays inside the same rule: the filter is named from the
-  // listener's words, never guessed from a species-like name (see the "Yang na"
-  // note above) - and the default search already spans every source, so the
-  // common case still needs no filter at all.
-  'DNP reference datasets have their own entity_type values and are reached by default,' +
-    ' so do not filter to them unless the listener names the dataset: "the plant ' +
+  // The forest-dataset entity_type values are otherwise opaque to a spoken
+  // question, so a listener asking for "the plant checklist" or "the wildlife
+  // checklist" gets no signal that those datasets have a name. Spelling the
+  // mapping out here is safe because it stays inside the same rule: the filter
+  // is named from the listener's words, never guessed from a species-like name
+  // (see the "Yang na" note above) - and the default search already spans every
+  // dataset, so the common case still needs no filter at all.
+  'Globie Earth\'s forest datasets have their own entity_type values and are reached by ' +
+    'default, so do not filter to them unless the listener names the dataset: "the plant ' +
     'checklist" means entity_type "dnp_plant", "the biodiversity survey" means ' +
     '"dnp_species", "the wildlife checklist" or "the protected species checklist" means ' +
     '"dnp_wildlife", and "animals seen in a park" or "park animals" means "dnp_fauna".',
@@ -108,48 +133,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** The `tools` array an OpenAI-compatible endpoint expects, from what the host sent. */
-function asFunctionTools(tools: AdvertisedTool[]): unknown[] {
+/** The tool list the model may call, in the provider-neutral shape llm.ts takes. */
+function asLlmTools(tools: AdvertisedTool[]): LlmTool[] {
   return tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description?.trim() || tool.name,
-      // A tool with no schema is still routable; an empty object schema is valid.
-      parameters: isRecord(tool.inputSchema) ? tool.inputSchema : { type: 'object', properties: {} },
-    },
+    name: tool.name,
+    description: tool.description?.trim() || tool.name,
+    // A tool with no schema is still routable; an empty object schema is valid.
+    parameters: isRecord(tool.inputSchema) ? tool.inputSchema : { type: 'object', properties: {} },
   }));
-}
-
-/** Reads the first tool call out of an OpenAI-compatible message. */
-function decisionFrom(message: { tool_calls?: unknown; content?: unknown }): RouteDecision {
-  const rationale = typeof message.content === 'string' ? message.content.trim() : '';
-  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-  const first = calls[0] as { function?: { name?: unknown; arguments?: unknown } } | undefined;
-  const name = first?.function?.name;
-  if (typeof name !== 'string' || !name) {
-    return { tool: null, arguments: {}, rationale: rationale || 'No tool matched that request.' };
-  }
-
-  let args: Record<string, unknown> = {};
-  const raw = first?.function?.arguments;
-  if (typeof raw === 'string' && raw.trim()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return {
-        tool: null,
-        arguments: {},
-        rationale: `The router returned arguments for ${name} that are not JSON.`,
-      };
-    }
-    if (isRecord(parsed)) args = parsed;
-  } else if (isRecord(raw)) {
-    args = raw;
-  }
-
-  return { tool: name, arguments: args, rationale };
 }
 
 export function registerRouterRoute(app: FastifyInstance): void {
@@ -175,18 +166,12 @@ export function registerRouterRoute(app: FastifyInstance): void {
       return reply.code(400).send({ error: 'The router body must list at least one tool with a name.' });
     }
 
-    const { baseUrl, model: defaultModel, apiKey } = deepseekConfig();
-    if (!apiKey) {
-      return reply.code(503).send({
-        error:
-          'The tool router is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
-          'DEEPSEEK_BASE_URL / DEEPSEEK_MODEL) in the MCP server environment.',
-      });
-    }
-
     // A caller may name a model, but only one this router offers. An unknown
     // name is refused rather than forwarded, so the allowlist cannot be walked
-    // past to bill some other model to this server's key.
+    // past to bill some other model to this server's key. Each offered id
+    // carries the provider that serves it, so this one choice also picks
+    // whether the call goes to DeepSeek or to Amazon Bedrock Nova.
+    const { model: defaultModel } = deepseekConfig();
     const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
     const spec = requestedModel ? modelSpec(requestedModel) : modelSpec(defaultModel);
     if (requestedModel && !spec) {
@@ -197,6 +182,20 @@ export function registerRouterRoute(app: FastifyInstance): void {
       });
     }
     const model = spec?.id ?? defaultModel;
+    // An unlisted default (DEEPSEEK_MODEL set to something off the list) still
+    // goes to DeepSeek, which is the provider that name belongs to.
+    const provider: LlmProvider = spec?.provider ?? 'deepseek';
+    if (!providerConfigured(provider)) {
+      return reply.code(503).send({
+        error:
+          provider === 'nova'
+            ? 'The tool router is not configured for Nova. Set the Bedrock credentials ' +
+              '(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS_BEARER_TOKEN_BEDROCK ' +
+              'API key, and BEDROCK_REGION or AWS_REGION) in the MCP server environment.'
+            : 'The tool router is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
+              'DEEPSEEK_BASE_URL / DEEPSEEK_MODEL) in the MCP server environment.',
+      });
+    }
 
     // An image turns the user message into multimodal content, which only a
     // vision model takes. Refusing here is the honest answer: the text-only
@@ -214,56 +213,53 @@ export function registerRouterRoute(app: FastifyInstance): void {
     }
 
     const utterance = body.utterance.trim().slice(0, 2000);
-    const userContent = image
-      ? [
-          { type: 'text', text: utterance },
-          { type: 'image_url', image_url: { url: image } },
-        ]
-      : utterance;
+    const parts: LlmPart[] = [{ type: 'text', text: utterance }];
+    if (image) parts.push({ type: 'image', url: image });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    let upstream: Response;
+    let result: LlmResult;
     try {
-      upstream = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt(Boolean(image)) },
-            { role: 'user', content: userContent },
-          ],
-          tools: asFunctionTools(tools),
-          tool_choice: 'auto',
+      result = await chat({
+        provider,
+        model,
+        request: {
+          system: systemPrompt(Boolean(image)),
+          parts,
+          tools: asLlmTools(tools),
           temperature: 0,
-        }),
-        signal: controller.signal,
+        },
+        timeoutMs: TIMEOUT_MS,
       });
     } catch (error) {
-      request.log.error({ err: error }, 'router: upstream fetch failed');
-      const message = controller.signal.aborted
-        ? `The router timed out after ${TIMEOUT_MS} ms.`
-        : `The router could not reach ${baseUrl}.`;
-      return reply.code(502).send({ error: message });
-    } finally {
-      clearTimeout(timer);
+      if (!(error instanceof LlmError)) throw error;
+      request.log.error({ err: error, kind: error.kind }, 'router: model call failed');
+      if (error.kind === 'timeout') {
+        return reply.code(502).send({ error: `The router timed out after ${TIMEOUT_MS} ms.` });
+      }
+      if (error.kind === 'upstream') {
+        return reply.code(502).send({
+          error: `The router's model endpoint returned ${error.status}. ${error.detail}`.trim(),
+        });
+      }
+      return reply.code(502).send({ error: 'The router could not reach its model endpoint.' });
     }
 
-    if (!upstream.ok) {
-      const detail = await upstream.text().catch(() => '');
-      request.log.error({ status: upstream.status }, 'router: upstream returned an error');
-      return reply.code(502).send({
-        error: `The router's model endpoint returned ${upstream.status}. ${detail.slice(0, 300)}`.trim(),
-      });
+    // The model's text is the rationale; a tool call is the decision. Arguments
+    // that were not readable JSON are reported rather than passed on unparsed,
+    // exactly as the OpenAI-compatible path did before.
+    let decision: RouteDecision;
+    if (result.toolCall && result.toolArgumentsUnreadable) {
+      decision = {
+        tool: null,
+        arguments: {},
+        rationale: `The router returned arguments for ${result.toolCall.name} that are not JSON.`,
+      };
+    } else if (result.toolCall) {
+      decision = { tool: result.toolCall.name, arguments: result.toolCall.arguments, rationale: result.text };
+    } else {
+      decision = { tool: null, arguments: {}, rationale: result.text || 'No tool matched that request.' };
     }
 
-    const payload = (await upstream.json().catch(() => null)) as { choices?: { message?: unknown }[] } | null;
-    const message = payload?.choices?.[0]?.message;
-    if (!isRecord(message)) {
-      return reply.code(502).send({ error: 'The router response had no message.' });
-    }
     // The model is echoed back so the host can say honestly which one answered.
-    return reply.send({ ...decisionFrom(message as { tool_calls?: unknown; content?: unknown }), model });
+    return reply.send({ ...decision, model: result.model });
   });
 }

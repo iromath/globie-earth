@@ -15,7 +15,7 @@ import type {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { GlobieMcpClient, isMutating, toolFields, type Handshake, type ToolField } from './mcp';
+import { GlobieMcpClient, firstText, isMutating, toolFields, type Handshake, type ToolField } from './mcp';
 import {
   recorderSupport,
   speak,
@@ -60,12 +60,26 @@ const micButton = requireElement<HTMLButtonElement>('mic-button');
 const voiceQuery = requireElement<HTMLInputElement>('voice-query');
 const askButton = requireElement<HTMLButtonElement>('ask-button');
 const stopButton = requireElement<HTMLButtonElement>('stop-speaking');
+const playButton = requireElement<HTMLButtonElement>('play-speaking');
 const voiceModel = requireElement<HTMLSelectElement>('voice-model');
 const voiceImage = requireElement<HTMLInputElement>('voice-image');
 const voiceImageNote = requireElement<HTMLParagraphElement>('voice-image-note');
 const voiceSource = requireElement<HTMLSelectElement>('voice-source');
+const voiceTts = requireElement<HTMLSelectElement>('voice-tts');
 const voiceStatus = requireElement<HTMLParagraphElement>('voice-status');
 const voiceResult = requireElement('voice-result');
+
+const playerPanel = requireElement('player-panel');
+const playerTitle = requireElement<HTMLParagraphElement>('player-title');
+const soundscapeAudio = requireElement<HTMLAudioElement>('soundscape-audio');
+const playerStatus = requireElement<HTMLParagraphElement>('player-status');
+const miniPlayer = requireElement('mini-player');
+const playerToggle = requireElement<HTMLButtonElement>('player-toggle');
+const playerElapsed = requireElement<HTMLSpanElement>('player-elapsed');
+const playerSeek = requireElement<HTMLInputElement>('player-seek');
+const playerTotal = requireElement<HTMLSpanElement>('player-total');
+const playerMute = requireElement<HTMLButtonElement>('player-mute');
+const playerVolume = requireElement<HTMLInputElement>('player-volume');
 
 const surfacePanel = requireElement('surface-panel');
 const panels: Record<'tools' | 'resources' | 'prompts' | 'transcript', HTMLElement> = {
@@ -155,6 +169,28 @@ function apiBase(): string | null {
   const host = endpoint.hostname;
   if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:3001';
   if (host.startsWith('mcp.')) return `${endpoint.protocol}//api.${host.slice(4)}`;
+  return null;
+}
+
+/**
+ * The sound studio's origin, derived the same way as apiBase().
+ *
+ * A track's `audioUrl` is relative to the studio, because the studio proxy does
+ * not know its own public origin (see studio/src/server.ts). The studio runs as
+ * its own origin beside the API - studio.globie.earth in production, the local
+ * studio port here - so the player resolves a relative URL against this, exactly
+ * as src/lib/studio.ts studioAssetUrl() does for the app.
+ */
+function studioBase(): string | null {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(urlField.value.trim());
+  } catch {
+    return null;
+  }
+  const host = endpoint.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8090';
+  if (host.startsWith('mcp.')) return `${endpoint.protocol}//studio.${host.slice(4)}`;
   return null;
 }
 
@@ -310,6 +346,7 @@ disconnectButton.addEventListener('click', async () => {
   panels.tools.replaceChildren();
   panels.resources.replaceChildren();
   panels.prompts.replaceChildren();
+  resetPlayer();
   setStatus(connectStatus, 'Disconnected.', 'ok');
   renderTranscript();
 });
@@ -502,6 +539,8 @@ async function callTool(
   try {
     const response = await client.callTool(tool.name, collectArgs(fields, inputs));
     renderToolResult(result, tool.name, response);
+    // A queued soundscape reveals the player and is polled until it is ready.
+    watchSoundscape(response);
     // The Tools tab is where a tool is called by hand, and its result is spoken
     // too - every MCP result is read aloud, not only the voice panel's.
     await speakResult(response, voiceStatus, `Called ${tool.name}`);
@@ -572,6 +611,227 @@ function renderToolResult(result: HTMLElement, name: string, response: CallToolR
     .map((block) => block.type);
   if (others.length) {
     result.append(note(`Also returned: ${others.join(', ')}.`));
+  }
+}
+
+/* ── The soundscape player ──────────────────────────────────────────────── */
+
+/**
+ * A soundscape's state, read from whichever tool returned it.
+ * generate_soundscape answers with a track id and "queued"; get_soundscape
+ * answers with the same id plus a title and, once the render has finished, the
+ * audio URL.
+ */
+interface Soundscape {
+  trackId: string;
+  status: string;
+  title?: string;
+  audioUrl?: string | null;
+  error?: string | null;
+}
+
+// A render is one long provider call, so the cadence mirrors src/lib/studio.ts:
+// check often at first, then back off - and give up after POLL_MAX so the page
+// never polls forever. Exactly one poll runs at a time.
+const POLL_FAST_MS = 5000;
+const POLL_SLOW_MS = 15000;
+const POLL_FAST_POLLS = 4;
+const POLL_MAX = 40;
+
+/** The track being waited on, if any. */
+let pollTrackId: string | null = null;
+let pollTimer: number | null = null;
+let pollCount = 0;
+
+/** The file the audio element currently points at, so a redraw never restarts it. */
+let soundscapeSrc = '';
+
+function isTerminal(status: string): boolean {
+  return status === 'ready' || status === 'failed';
+}
+
+/** Reads a track's fields out of a tool result's JSON block, or null if there is none. */
+function soundscapeOf(response: CallToolResult): Soundscape | null {
+  const text = firstText(response);
+  if (!text.trim()) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(payload)) return null;
+  const trackId = typeof payload.trackId === 'string' ? payload.trackId : null;
+  if (!trackId) return null;
+  return {
+    trackId,
+    status: typeof payload.status === 'string' ? payload.status : 'queued',
+    title: typeof payload.title === 'string' ? payload.title : undefined,
+    audioUrl: typeof payload.audioUrl === 'string' ? payload.audioUrl : null,
+    error: typeof payload.error === 'string' ? payload.error : null,
+  };
+}
+
+/** Seconds as m:ss, the shape a transport control reads. */
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/** Draws the audio element's own state into the mini player's controls. */
+function syncPlayer(): void {
+  playerToggle.textContent = soundscapeAudio.paused ? 'Play' : 'Pause';
+  playerElapsed.textContent = formatTime(soundscapeAudio.currentTime);
+  playerTotal.textContent = formatTime(soundscapeAudio.duration);
+  const duration = soundscapeAudio.duration;
+  playerSeek.value =
+    Number.isFinite(duration) && duration > 0
+      ? String(Math.round((soundscapeAudio.currentTime / duration) * 1000))
+      : '0';
+  playerMute.textContent = soundscapeAudio.muted ? 'Unmute' : 'Mute';
+  playerVolume.value = String(soundscapeAudio.muted ? 0 : soundscapeAudio.volume);
+}
+
+/**
+ * Starts the track without a click. A browser may still refuse - autoplay is
+ * gated on a prior user gesture, and a render often becomes ready many seconds
+ * after the call that asked for it - so a refusal is reported, not swallowed.
+ */
+function autoplaySoundscape(): void {
+  const started = soundscapeAudio.play();
+  if (!started) return;
+  started
+    .then(() => setStatus(playerStatus, 'Ready — playing.', 'ok'))
+    .catch(() => {
+      syncPlayer();
+      setStatus(playerStatus, 'Ready — press play to hear it.', 'ok');
+    });
+}
+
+/** Draws a track's state into the player panel. */
+function renderSoundscape(track: Soundscape): void {
+  playerPanel.hidden = false;
+  playerTitle.textContent = track.title ? `“${track.title}”` : 'Your soundscape';
+
+  if (track.status === 'ready' && track.audioUrl) {
+    const base = studioBase();
+    const src = base ? new URL(track.audioUrl, base).toString() : track.audioUrl;
+    miniPlayer.hidden = false;
+    if (src !== soundscapeSrc) {
+      soundscapeSrc = src;
+      soundscapeAudio.src = src;
+      soundscapeAudio.load();
+      autoplaySoundscape();
+    }
+    syncPlayer();
+    return;
+  }
+
+  miniPlayer.hidden = true;
+  if (track.status === 'failed') {
+    setStatus(
+      playerStatus,
+      track.error ? `The render failed: ${track.error}` : 'The render failed.',
+      'err',
+    );
+  } else {
+    setStatus(playerStatus, `Rendering (${track.status}) — this panel keeps checking on its own.`);
+  }
+}
+
+/** Stops any in-flight poll. */
+function stopSoundscapePolling(): void {
+  if (pollTimer !== null) {
+    window.clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  pollTrackId = null;
+  pollCount = 0;
+}
+
+/** Silences and empties the player, and hides its panel - used when disconnecting. */
+function resetPlayer(): void {
+  stopSoundscapePolling();
+  soundscapeAudio.pause();
+  soundscapeAudio.removeAttribute('src');
+  soundscapeSrc = '';
+  playerTitle.textContent = '';
+  miniPlayer.hidden = true;
+  playerElapsed.textContent = '0:00';
+  playerTotal.textContent = '0:00';
+  playerSeek.value = '0';
+  playerPanel.hidden = true;
+  setStatus(playerStatus, '');
+}
+
+function scheduleSoundscapePoll(): void {
+  const delay = pollCount < POLL_FAST_POLLS ? POLL_FAST_MS : POLL_SLOW_MS;
+  pollTimer = window.setTimeout(() => {
+    void pollSoundscape();
+  }, delay);
+}
+
+/** Asks the server how a render is doing, through the read-only get_soundscape tool. */
+async function pollSoundscape(): Promise<void> {
+  pollTimer = null;
+  const trackId = pollTrackId;
+  if (!trackId || !client.connected) {
+    stopSoundscapePolling();
+    return;
+  }
+  pollCount += 1;
+  try {
+    const response = await client.callTool('get_soundscape', { trackId });
+    renderTranscript();
+    if (response.isError) {
+      setStatus(playerStatus, `Could not check the render: ${firstText(response)}`, 'err');
+    } else {
+      const track = soundscapeOf(response);
+      if (track) {
+        renderSoundscape(track);
+        if (isTerminal(track.status)) {
+          stopSoundscapePolling();
+          return;
+        }
+      }
+    }
+  } catch (error) {
+    setStatus(playerStatus, `Could not check the render: ${errorMessage(error)}`, 'err');
+  }
+  if (pollCount >= POLL_MAX) {
+    stopSoundscapePolling();
+    setStatus(
+      playerStatus,
+      'Stopped checking — the render is taking longer than this page will wait. Call get_soundscape with the track id to check again.',
+    );
+    return;
+  }
+  scheduleSoundscapePoll();
+}
+
+/**
+ * Reacts to a soundscape in a tool result: reveals the player, then either starts
+ * polling a queued track or shows a finished one. Called after every tool call,
+ * so it catches generate_soundscape and a manual get_soundscape alike.
+ */
+function watchSoundscape(response: CallToolResult): void {
+  if (response.isError) return;
+  const track = soundscapeOf(response);
+  if (!track) return;
+
+  renderSoundscape(track);
+
+  if (isTerminal(track.status)) {
+    if (track.trackId === pollTrackId) stopSoundscapePolling();
+    return;
+  }
+  // A newly queued track: begin polling it. Re-reading the one already being
+  // polled (a manual get_soundscape) leaves the running poll undisturbed.
+  if (track.trackId !== pollTrackId) {
+    stopSoundscapePolling();
+    pollTrackId = track.trackId;
+    scheduleSoundscapePoll();
   }
 }
 
@@ -1021,9 +1281,43 @@ voiceImage.addEventListener('change', () => {
 /**
  * What the server's /health said about its own ears and mouth. `null` means we
  * have not asked yet; `configured: false` means we asked and the server has no
- * cascade, so the browser's Web Speech API is the input path instead.
+ * cascade, so the browser's Web Speech API is the input path instead. `voices`
+ * is the mouth's picker options and `voice` is the one it speaks with by default.
  */
-let speechCascade: { configured: boolean; sttModel: string; ttsModel: string } | null = null;
+let speechCascade: {
+  configured: boolean;
+  sttModel: string;
+  ttsModel: string;
+  voice: string;
+  voices: string[];
+} | null = null;
+
+/**
+ * Fills the voice picker from what the server's mouth advertises. With no
+ * cascade there is nothing to pick - the browser's own synthesis reads replies -
+ * so the control is disabled and says so rather than offering dead options.
+ */
+function renderVoiceOptions(): void {
+  voiceTts.replaceChildren();
+  const voices = speechCascade?.configured ? speechCascade.voices : [];
+  if (!voices.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = speechCascade?.configured ? 'Server default' : 'Browser voice';
+    voiceTts.append(option);
+    voiceTts.disabled = true;
+    return;
+  }
+  for (const voice of voices) {
+    const option = document.createElement('option');
+    option.value = voice;
+    option.textContent = voice;
+    voiceTts.append(option);
+  }
+  const preferred = speechCascade?.voice ?? '';
+  voiceTts.value = voices.includes(preferred) ? preferred : voices[0];
+  voiceTts.disabled = false;
+}
 
 /** Asks the server's /health whether it has a speech cascade, and with what. */
 async function probeSpeech(): Promise<void> {
@@ -1038,16 +1332,20 @@ async function probeSpeech(): Promise<void> {
       speechCascade = null;
       return;
     }
-    const { configured, sttModel, ttsModel } = payload.speech;
+    const { configured, sttModel, ttsModel, voice, voices } = payload.speech;
     speechCascade = {
       configured: configured === true,
       sttModel: typeof sttModel === 'string' ? sttModel : '',
       ttsModel: typeof ttsModel === 'string' ? ttsModel : '',
+      voice: typeof voice === 'string' ? voice : '',
+      voices: Array.isArray(voices) ? voices.filter((item): item is string => typeof item === 'string') : [],
     };
   } catch {
     // Best-effort: an unreachable /health is not an error, it just means the
     // panel reports the fallback path instead of the cascade.
     speechCascade = null;
+  } finally {
+    renderVoiceOptions();
   }
 }
 
@@ -1129,6 +1427,18 @@ async function transcribe(audio: string): Promise<string> {
 /** The audio element currently playing a server-synthesised reply, if any. */
 let releaseRemote: (() => void) | null = null;
 
+/**
+ * The last reply read aloud, kept so Play can read it again. Empty until the
+ * first reply, which is what leaves Play disabled on a fresh page.
+ */
+let lastSpoken = '';
+
+/** Points the Play button at the reply just read, or disables it when empty. */
+function rememberSpoken(text: string): void {
+  lastSpoken = text;
+  playButton.disabled = !text.trim();
+}
+
 /** Stops a server-synthesised reply, if one is playing. */
 function stopRemoteAudio(): void {
   releaseRemote?.();
@@ -1136,11 +1446,13 @@ function stopRemoteAudio(): void {
 }
 
 /** Asks the server's mouth for audio and plays it. */
-async function speakRemote(text: string): Promise<boolean> {
+async function speakRemote(text: string, voice: string): Promise<boolean> {
   const response = await fetch(voiceUrl('/voice/speak'), {
     method: 'POST',
     headers: voiceHeaders(),
-    body: JSON.stringify({ text }),
+    // The voice is one of /health's speech.voices; the server refuses any other,
+    // so an empty picker value simply means "speak the configured default".
+    body: JSON.stringify({ text, voice: voice || undefined }),
   });
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);
@@ -1179,7 +1491,7 @@ async function say(text: string): Promise<boolean> {
   if (!text.trim()) return false;
   if (speechCascade?.configured) {
     stopSpeaking();
-    return speakRemote(text);
+    return speakRemote(text, voiceTts.value);
   }
   return speak(text, {
     onStart: () => {
@@ -1218,6 +1530,7 @@ async function speakResult(
  */
 async function readAloud(text: string, status: HTMLElement, prefix: string): Promise<void> {
   if (!text.trim()) return;
+  rememberSpoken(text);
   try {
     if (!(await say(text))) stopButton.hidden = true;
   } catch (error) {
@@ -1371,7 +1684,7 @@ async function ask(): Promise<void> {
     const args = { ...decision.arguments };
     if (chosen && attachedImage && takesImageArgument(chosen)) args.image = attachedImage;
 
-    // The Source selector narrows a search to one DNP reference dataset. Filled
+    // The Source selector narrows a search to one Globie Earth dataset. Filled
     // in the same guarded way as the photo - only into a tool that declares an
     // entity_type argument - and only when the listener picked a source, so an
     // unrelated call is never given a filter it cannot use (plan §17.5).
@@ -1381,6 +1694,7 @@ async function ask(): Promise<void> {
     setStatus(voiceStatus, `Calling ${decision.tool}…`);
     const response = await client.callTool(decision.tool, args);
     renderToolResult(voiceResult, decision.tool, response);
+    watchSoundscape(response);
     const via = decision.model ? ` via ${decision.model}` : '';
     if (response.isError) {
       setStatus(voiceStatus, 'The tool returned an error; see the result below.', 'err');
@@ -1496,11 +1810,54 @@ stopButton.addEventListener('click', () => {
   setStatus(voiceStatus, 'Stopped reading.');
 });
 
+playButton.addEventListener('click', () => {
+  if (!lastSpoken.trim()) return;
+  void readAloud(lastSpoken, voiceStatus, 'Replaying the reply');
+});
+
+/* ── Mini player ────────────────────────────────────────────────────────── */
+
+playerToggle.addEventListener('click', () => {
+  if (soundscapeAudio.paused) {
+    void soundscapeAudio.play().catch(() => syncPlayer());
+  } else {
+    soundscapeAudio.pause();
+  }
+});
+
+playerSeek.addEventListener('input', () => {
+  const duration = soundscapeAudio.duration;
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  soundscapeAudio.currentTime = (Number(playerSeek.value) / 1000) * duration;
+  syncPlayer();
+});
+
+playerMute.addEventListener('click', () => {
+  soundscapeAudio.muted = !soundscapeAudio.muted;
+  syncPlayer();
+});
+
+playerVolume.addEventListener('input', () => {
+  const level = Number(playerVolume.value);
+  soundscapeAudio.volume = level;
+  // Dragging the volume up is the gesture that expects sound back; a drag to
+  // zero is not a separate mute, so only unmute when the listener raises it.
+  if (level > 0 && soundscapeAudio.muted) soundscapeAudio.muted = false;
+  syncPlayer();
+});
+
+// The element is now the source of truth: every transport state it reports is
+// drawn back into the bar, including changes this page did not initiate.
+for (const event of ['timeupdate', 'loadedmetadata', 'play', 'pause', 'ended'] as const) {
+  soundscapeAudio.addEventListener(event, syncPlayer);
+}
+
 /* ── Boot ───────────────────────────────────────────────────────────────── */
 
 urlField.value = defaultEndpoint();
 deviceField.value = persistentDeviceId();
 setConnectedState(false);
 renderVoiceSupport();
+renderVoiceOptions();
 selectTab('tools');
 renderTranscript();

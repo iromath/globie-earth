@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<!--
+  The Globie Earth "map" MCP App (SEP-1865 / io.modelcontextprotocol/ui).
+
+  One archetype document, shared by every tool that answers about a place -
+  today that is get_sanctuary_conditions, the only geo tool on this server.
+  Which view to draw is read from the host's own hostContext.toolInfo.tool.name
+  (SEP-1865); a host that omits toolInfo falls back to inferring the view from
+  the payload's own shape. src/ui/apps.ts holds the tool -> archetype mapping,
+  and its names must match the VIEWS keys below.
+
+  Entirely self-contained - no external script, style, image or font - which is
+  what lets it run under the host's restrictive default CSP (connect-src 'none'),
+  so `_meta.ui.csp` need not widen anything.
+
+  The panel is a locator plate, not a map: tiles cannot be fetched from a
+  sandboxed view that may make no network request at all, and drawing a
+  coastline from memory would be a lie. So the plate shows the sanctuary's own
+  coordinates as text, under a decorative locator, and every reading the tool
+  actually returned sits beside it. The readings are Open-Meteo *modelled*
+  fields, not a sensor in the wetland, and the note says so.
+
+  Authored at the Alexa+ design-guide's 768x480 base and scaled by one root
+  `zoom` (1.667 for the far-field Show 8/15, 1280x800). Light and dark are both
+  first-class. Touch targets are >=48x48.
+-->
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Globie Earth</title>
+    <style>
+      :root {
+        /* One root scale for the whole surface; the host's container width
+           decides it (see applyHostContext). */
+        --ui-scale: 1;
+        /* Spacing: 2 / 6 / 8 / 12 / 16 / 20 / 24. */
+        --space-2: 2px;
+        --space-6: 6px;
+        --space-8: 8px;
+        --space-12: 12px;
+        --space-16: 16px;
+        --space-20: 20px;
+        --space-24: 24px;
+        /* Shape: 4 / 8 / 12 / 16 + shapeCircle. */
+        --shape-8: 8px;
+        --shape-12: 12px;
+        --shape-16: 16px;
+        --shape-circle: 9999px;
+        /* The touch-target floor the accessibility guide requires. */
+        --target: 48px;
+        /* Typography, at the 768x480 base. */
+        --font-display: 40px;
+        --font-headline: 20px;
+        --font-body: 14px;
+        --font-caption: 12px;
+        --font-label: 10px;
+        /* The widget is sized to the 768x480 authoring viewport; the host may
+           give it more room in fullscreen. */
+        --base-width: 768px;
+      }
+
+      /* Light and dark parity, keyed off hostContext.theme. Text tones are
+         picked for the required contrast (>=4.5:1 under 18px, >=3:1 at or
+         above). */
+      html[data-theme='dark'] {
+        --surface: #14181e;
+        --surface-inner: #1b2028;
+        --text: #f2f4f7;
+        --text-muted: #aab3c0;
+        --border: #2b323c;
+        --button: #2d415e;
+        --button-text: #eaf0f8;
+        --plate: #17211c;
+        --plate-line: #24332b;
+        --aqi-good: #58c06a;
+        --aqi-fair: #d9b23c;
+        --aqi-moderate: #e08b3a;
+        --aqi-poor: #e0605a;
+      }
+      html[data-theme='light'] {
+        --surface: #ffffff;
+        --surface-inner: #faf9fb;
+        --text: #171b21;
+        --text-muted: #49515e;
+        --border: #e2e4ea;
+        --button: #2d415e;
+        --button-text: #ffffff;
+        --plate: #eef3ee;
+        --plate-line: #d7e0d7;
+        --aqi-good: #2e7d32;
+        --aqi-fair: #8a6d00;
+        --aqi-moderate: #b25b00;
+        --aqi-poor: #c0342a;
+      }
+
+      html {
+        zoom: var(--ui-scale);
+        background: transparent;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+        font-size: var(--font-body);
+        line-height: 1.35;
+      }
+
+      .card {
+        box-sizing: border-box;
+        width: var(--base-width);
+        max-width: 100%;
+        padding: var(--space-20);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-16);
+        background: var(--surface);
+      }
+
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-12);
+      }
+      .mark {
+        display: flex;
+        align-items: center;
+        gap: var(--space-8);
+        min-width: 0;
+      }
+      .leaf {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: var(--shape-circle);
+        background: var(--aqi-good);
+      }
+      .brand {
+        font-size: var(--font-label);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+      .title {
+        margin: var(--space-2) 0 0;
+        font-size: var(--font-headline);
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      /* 48x48 minimum, whatever the label says. */
+      .toggle {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-6);
+        min-width: var(--target);
+        min-height: var(--target);
+        padding: 0 var(--space-12);
+        border: 0;
+        border-radius: var(--shape-12);
+        background: var(--button);
+        color: var(--button-text);
+        font: inherit;
+        font-size: var(--font-caption);
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .toggle[hidden] {
+        display: none;
+      }
+      .toggle:focus-visible {
+        outline: 3px solid var(--text);
+        outline-offset: 2px;
+      }
+
+      /* The locator plate. The container itself carries no role, the locator
+         ring inside it is decorative, and the coordinates it holds are real
+         data - so those stay in the accessibility tree rather than being lost
+         behind an aria-hidden ancestor. */
+      .plate {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-12);
+        height: 150px;
+        margin-top: var(--space-16);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-12);
+        background-color: var(--plate);
+        background-image:
+          linear-gradient(var(--plate-line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--plate-line) 1px, transparent 1px);
+        background-size: 24px 24px;
+        overflow: hidden;
+      }
+      .locator {
+        position: relative;
+        width: 16px;
+        height: 16px;
+        border-radius: var(--shape-circle);
+        background: var(--aqi-good);
+      }
+      /* A single quiet ring: enough to read as "here", not enough to distract. */
+      .locator::after {
+        content: '';
+        position: absolute;
+        inset: -10px;
+        border: 2px solid var(--aqi-good);
+        border-radius: var(--shape-circle);
+        opacity: 0.5;
+      }
+      .coords {
+        padding: var(--space-6) var(--space-12);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-circle);
+        background: var(--surface);
+        font-size: var(--font-caption);
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Announced, never seen. The coordinate chip is a bare number pair, so it
+         needs a name for anyone who cannot see the plate around it. */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .readout {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-8);
+        margin-top: var(--space-20);
+      }
+      .temp {
+        font-size: var(--font-display);
+        font-weight: 600;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      .unit {
+        font-size: var(--font-headline);
+        color: var(--text-muted);
+      }
+      .caption {
+        margin-left: auto;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+      }
+
+      .metrics {
+        margin: var(--space-16) 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .metric {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-16);
+        padding: var(--space-12) 0;
+        border-top: 1px solid var(--border);
+      }
+      .metric-label {
+        font-size: var(--font-body);
+        color: var(--text-muted);
+      }
+      .metric-value {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-8);
+        font-size: var(--font-body);
+        font-weight: 600;
+        color: var(--text);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      /* The band dot is decorative: the number beside it carries the contrast,
+         so a color-blind reader loses nothing. */
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: var(--shape-circle);
+        background: var(--text-muted);
+      }
+      .dot--good {
+        background: var(--aqi-good);
+      }
+      .dot--fair {
+        background: var(--aqi-fair);
+      }
+      .dot--moderate {
+        background: var(--aqi-moderate);
+      }
+      .dot--poor {
+        background: var(--aqi-poor);
+      }
+
+      .note {
+        margin: var(--space-16) 0 0;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+      }
+      .note[hidden] {
+        display: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" id="card">
+      <div class="head">
+        <div class="mark">
+          <span class="leaf" aria-hidden="true"></span>
+          <div>
+            <div class="brand">Globie Earth</div>
+            <h1 class="title" id="heading">One moment…</h1>
+          </div>
+        </div>
+        <!-- Shown only when the host offers both inline and fullscreen. -->
+        <button class="toggle" id="toggle" type="button" hidden aria-label="Expand to fullscreen">
+          Fullscreen
+        </button>
+      </div>
+
+      <div class="plate" id="plate">
+        <span class="locator" aria-hidden="true"></span>
+        <span class="sr-only">Sanctuary coordinates</span>
+        <span class="coords" id="coords">--</span>
+      </div>
+
+      <div class="readout" role="status" aria-live="polite">
+        <span class="temp" id="temp">--</span>
+        <span class="unit">°C</span>
+        <span class="caption">air temperature</span>
+      </div>
+
+      <ul class="metrics" id="metrics" aria-live="polite"></ul>
+
+      <p class="note" id="note" hidden></p>
+    </main>
+
+    <script>
+      (function () {
+        'use strict';
+
+        var APP_INFO = { name: 'globie-earth-map', version: '1.0.0' };
+        var root = document.documentElement;
+        var card = document.getElementById('card');
+        var headingEl = document.getElementById('heading');
+        var toggle = document.getElementById('toggle');
+        var coordsEl = document.getElementById('coords');
+        var tempEl = document.getElementById('temp');
+        var metricsEl = document.getElementById('metrics');
+        var noteEl = document.getElementById('note');
+
+        // Shown until the tool has answered, and whenever it answered without a
+        // source of its own.
+        var PLACEHOLDER_NOTE =
+          'Modelled fields for the sanctuary coordinates — not an on-site sensor.';
+
+        var view = null;
+        var latest = null;
+
+        // ---- The postMessage JSON-RPC 2.0 bridge (SEP-1865) ------------------
+        // The view is a sandboxed, possibly opaque-origin iframe: the host frame
+        // is the only peer and postMessage is the only channel. No origin can be
+        // verified against, so messages from any frame other than our parent are
+        // ignored outright.
+        var nextId = 1;
+        var pending = Object.create(null);
+
+        function postToHost(message) {
+          window.parent.postMessage(message, '*');
+        }
+
+        function request(method, params) {
+          var id = 'globie-' + nextId++;
+          return new Promise(function (resolve) {
+            pending[id] = resolve;
+            postToHost({ jsonrpc: '2.0', id: id, method: method, params: params });
+          });
+        }
+
+        function notifyHost(method, params) {
+          postToHost({ jsonrpc: '2.0', method: method, params: params });
+        }
+
+        // ---- Size reporting --------------------------------------------------
+        var lastSize = '';
+        function reportSize() {
+          var size = Math.ceil(root.scrollWidth) + 'x' + Math.ceil(root.scrollHeight);
+          if (size === lastSize) return;
+          lastSize = size;
+          notifyHost('ui/notifications/size-changed', {
+            width: Math.ceil(root.scrollWidth),
+            height: Math.ceil(root.scrollHeight),
+          });
+        }
+
+        // ---- hostContext -----------------------------------------------------
+        var currentMode = 'inline';
+
+        function applyHostContext(context) {
+          if (!context) return;
+          if (context.theme === 'light' || context.theme === 'dark') {
+            root.setAttribute('data-theme', context.theme);
+          }
+          // One root scale, never per-element: author at 768x480, zoom 1.667 for
+          // the far-field Show 8/15 (1280x800).
+          var dimensions = context.containerDimensions || {};
+          var width = dimensions.maxWidth || dimensions.width || 0;
+          root.style.setProperty('--ui-scale', width >= 1024 ? '1.667' : '1');
+
+          currentMode = context.displayMode || 'inline';
+          var modes = context.availableDisplayModes || [];
+          toggle.hidden = !(modes.indexOf('inline') !== -1 && modes.indexOf('fullscreen') !== -1);
+          updateToggleLabel();
+          rememberToolName(context);
+          reportSize();
+        }
+
+        function rememberToolName(context) {
+          var tool = context && context.toolInfo && context.toolInfo.tool;
+          var name = tool && typeof tool.name === 'string' ? tool.name : null;
+          if (name && VIEWS[name]) {
+            view = name;
+            if (latest) render(latest);
+          }
+        }
+
+        function updateToggleLabel() {
+          var expand = currentMode !== 'fullscreen';
+          toggle.textContent = expand ? 'Fullscreen' : 'Exit';
+          toggle.setAttribute('aria-label', expand ? 'Expand to fullscreen' : 'Exit fullscreen');
+        }
+
+        // ---- Small DOM helpers ----------------------------------------------
+        function el(tag, className, text) {
+          var node = document.createElement(tag);
+          if (className) node.className = className;
+          if (text !== undefined && text !== null && text !== '') {
+            // textContent, never innerHTML: nothing the server returns is markup.
+            node.appendChild(document.createTextNode(String(text)));
+          }
+          return node;
+        }
+
+        function present(value) {
+          return value !== null && value !== undefined && value !== '';
+        }
+
+        /** A missing reading is a dash, never a made-up zero. */
+        function number(value) {
+          return present(value) ? String(value) : '--';
+        }
+
+        function setText(node, value) {
+          node.textContent = present(value) ? String(value) : '';
+          node.hidden = !present(value);
+        }
+
+        // `16.482, 102.819` with the hemispheres spelled out, so the plate reads
+        // as a place rather than as two loose numbers.
+        function coordinateText(coordinate) {
+          if (!coordinate) return null;
+          var latitude = coordinate.latitude;
+          var longitude = coordinate.longitude;
+          if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
+          return (
+            Math.abs(latitude).toFixed(3) +
+            '° ' +
+            (latitude >= 0 ? 'N' : 'S') +
+            ', ' +
+            Math.abs(longitude).toFixed(3) +
+            '° ' +
+            (longitude >= 0 ? 'E' : 'W')
+          );
+        }
+
+        function bandClass(aqiLabel) {
+          switch (aqiLabel) {
+            case 'Good':
+              return 'dot--good';
+            case 'Fair':
+              return 'dot--fair';
+            case 'Moderate':
+              return 'dot--moderate';
+            case 'Poor':
+              return 'dot--poor';
+            default:
+              return '';
+          }
+        }
+
+        function metric(label, value, dotClass) {
+          var row = el('li', 'metric');
+          row.appendChild(el('span', 'metric-label', label));
+          var valueEl = el('span', 'metric-value');
+          if (dotClass) {
+            // The band dot is decorative: the label is already in the text.
+            var dot = el('span', 'dot ' + dotClass);
+            dot.setAttribute('aria-hidden', 'true');
+            valueEl.appendChild(dot);
+          }
+          valueEl.appendChild(document.createTextNode(value));
+          row.appendChild(valueEl);
+          return row;
+        }
+
+        // ---- The views -------------------------------------------------------
+        var VIEWS = {
+          get_sanctuary_conditions: function (payload) {
+            headingEl.textContent = 'Sanctuary conditions';
+
+            var coords = coordinateText(payload.coordinate);
+            coordsEl.textContent = coords || '--';
+
+            tempEl.textContent = number(payload.temperatureC);
+
+            var rows = [
+              metric(
+                'Humidity',
+                present(payload.humidityPct) ? payload.humidityPct + '%' : '--',
+                '',
+              ),
+            ];
+            // The AQI row appears only when there is a number to band, so a
+            // missing reading never renders as a made-up "Good".
+            if (present(payload.europeanAqi)) {
+              rows.push(
+                metric(
+                  'Air quality',
+                  payload.europeanAqi + (payload.aqiLabel ? ' · ' + payload.aqiLabel : ''),
+                  bandClass(payload.aqiLabel),
+                ),
+              );
+            }
+            if (present(payload.carbonDioxidePpm)) {
+              rows.push(metric('Carbon dioxide', payload.carbonDioxidePpm + ' ppm', ''));
+            }
+            if (present(payload.observedAt)) {
+              rows.push(metric('Observed', payload.observedAt, ''));
+            }
+            metricsEl.replaceChildren.apply(metricsEl, rows);
+
+            setText(noteEl, payload.source || PLACEHOLDER_NOTE);
+          },
+        };
+
+        // When the host never names the tool, the payload's own shape still says
+        // which view it is.
+        function inferView(payload) {
+          if (!payload || typeof payload !== 'object') return null;
+          if ('coordinate' in payload && 'temperatureC' in payload) return 'get_sanctuary_conditions';
+          return null;
+        }
+
+        // ---- The tool result -------------------------------------------------
+        function extractPayload(params) {
+          if (!params) return null;
+          if (params.structuredContent) return params.structuredContent;
+          var block = Array.isArray(params.content) ? params.content[0] : null;
+          if (block && block.type === 'text') {
+            try {
+              return JSON.parse(block.text);
+            } catch (error) {
+              return null;
+            }
+          }
+          return null;
+        }
+
+        function render(payload) {
+          if (!payload) {
+            showPlaceholder();
+            return;
+          }
+          latest = payload;
+          var name = view || inferView(payload);
+          var drawView = name ? VIEWS[name] : null;
+          if (!drawView) {
+            headingEl.textContent = 'Result';
+            coordsEl.textContent = '--';
+            metricsEl.replaceChildren();
+            setText(noteEl, null);
+            reportSize();
+            return;
+          }
+          drawView(payload);
+          reportSize();
+        }
+
+        function showPlaceholder(message) {
+          headingEl.textContent = 'One moment…';
+          coordsEl.textContent = '--';
+          tempEl.textContent = '--';
+          metricsEl.replaceChildren(
+            metric('Reading the sanctuary…', message || 'One moment.', ''),
+          );
+          noteEl.hidden = false;
+          noteEl.textContent = PLACEHOLDER_NOTE;
+          reportSize();
+        }
+
+        // ---- Host messages ---------------------------------------------------
+        window.addEventListener('message', function (event) {
+          // Only the parent frame is a peer.
+          if (event.source !== window.parent) return;
+          var message = event.data;
+          if (!message || message.jsonrpc !== '2.0') return;
+
+          if (message.id !== undefined && pending[message.id]) {
+            var settle = pending[message.id];
+            delete pending[message.id];
+            settle(message.result);
+            return;
+          }
+
+          switch (message.method) {
+            case 'ui/notifications/tool-input':
+              showPlaceholder('Reading the sanctuary…');
+              break;
+            case 'ui/notifications/tool-result':
+              render(extractPayload(message.params));
+              break;
+            case 'ui/notifications/tool-cancelled':
+              showPlaceholder('That reading was cancelled.');
+              break;
+            case 'ui/notifications/host-context-changed':
+              applyHostContext(message.params);
+              break;
+            case 'ui/resource-teardown':
+              // The host is closing the view; nothing is held open.
+              break;
+            default:
+              break;
+          }
+        });
+
+        toggle.addEventListener('click', function () {
+          var target = currentMode === 'fullscreen' ? 'inline' : 'fullscreen';
+          // SEP-1865 names this parameter `mode`, and answers with the mode it
+          // actually set - which may differ from the one requested.
+          request('ui/request-display-mode', { mode: target }).then(function (result) {
+            currentMode = (result && result.mode) || target;
+            updateToggleLabel();
+            reportSize();
+          });
+        });
+
+        // Any layout change - the host's zoom, a wrap, a font swap - is reported
+        // to the host so the frame never clips the card.
+        if ('ResizeObserver' in window) {
+          new ResizeObserver(reportSize).observe(card);
+        }
+
+        // ---- Handshake -------------------------------------------------------
+        request('ui/initialize', {
+          appInfo: APP_INFO,
+          appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+        })
+          .then(function (result) {
+            applyHostContext(result && result.hostContext);
+            notifyHost('ui/notifications/initialized', {});
+          })
+          .catch(function () {
+            /* no host: stay on the placeholder */
+          })
+          .then(reportSize);
+      })();
+    </script>
+  </body>
+</html>

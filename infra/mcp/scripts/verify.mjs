@@ -14,6 +14,8 @@
 //
 // Exit code 0 means every assertion held.
 
+import { readFile } from 'node:fs/promises';
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -38,8 +40,13 @@ const EXPECTED_TOOLS = [
   'get_eco_balance',
   // Phase 3
   'generate_soundscape',
+  'get_soundscape',
   'search_podcasts',
   'get_trending_podcasts',
+  'get_podcasts_by_theme',
+  // Phase 4 - the sanctuary's own Local Culture / Thai cookbook (src/tools/cookbook.ts).
+  'search_local_culture',
+  'get_recipe',
 ];
 const EXPECTED_TEMPLATES = [
   'globie://species/{id}',
@@ -96,6 +103,68 @@ async function healthEmbedding() {
     return typeof payload?.embedding?.provider === 'string' ? payload.embedding.provider : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Calls a tool that must be refused, and asserts the refusal is legible.
+ *
+ * Amazon's guide asks for tools to be called with invalid input during isolated
+ * testing, and for failures to be structured enough that a host can ask a
+ * specific follow-up. Two refusals are therefore acceptable: a JSON-RPC
+ * InvalidParams error (a schema violation, which the SDK raises before the
+ * handler runs) and an `isError` tool result (a semantic failure the tool
+ * explains itself). What must never happen is a silent success or a crash.
+ */
+async function expectRefusal(label, name, args) {
+  try {
+    const result = await client.callTool({ name, arguments: args });
+    if (result?.isError) {
+      check(label, firstText(result).length > 0, `tool error: ${firstText(result).replace(/\s+/g, ' ').slice(0, 80)}`);
+    } else {
+      check(label, false, 'the server accepted invalid input without an error');
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    check(label, /invalid|error|not found|unknown/i.test(message), message.replace(/\s+/g, ' ').slice(0, 110));
+  }
+}
+
+/**
+ * Every icon and image the add-on manifest points at must be an image.
+ *
+ * The web host answers an unknown path with the SPA shell at HTTP 200, so a
+ * missing asset and a present one share a status code: only the content type
+ * tells them apart. The set is read from addon.json rather than hard-coded, so
+ * a URI edited there is checked here, and this runs after the MCP session so it
+ * still reports when the server is unreachable.
+ */
+async function checkAddonAssets() {
+  console.log('\n14. add-on store assets');
+  const manifestPath = new URL('../addon-package/addon.json', import.meta.url);
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+
+  const uris = [];
+  for (const locale of Object.values(manifest.storeListing?.locales ?? {})) {
+    const media = locale.mediaAssets ?? {};
+    for (const icon of media.icons?.light ?? []) uris.push(icon.uri);
+    for (const icon of media.icons?.dark ?? []) uris.push(icon.uri);
+    for (const image of media.carouselImages ?? []) uris.push(image.uri);
+    for (const image of media.bannerImages ?? []) uris.push(image.uri);
+  }
+
+  for (const uri of uris) {
+    try {
+      const response = await fetch(uri);
+      const type = response.headers.get('content-type') ?? '';
+      check(
+        `${uri} is an image`,
+        response.ok && /^image\//.test(type),
+        `status=${response.status} type=${type || '(none)'}`,
+      );
+    } catch (error) {
+      check(`${uri} is an image`, false, error instanceof Error ? error.message : String(error));
+    }
   }
 }
 
@@ -240,6 +309,64 @@ try {
     `        ${search.isError ? 'tool error' : `${searchJson?.method ?? '?'} result`}: ${searchText.replace(/\s+/g, ' ').slice(0, 140)}`,
   );
 
+  // 7b. tools/call on the Local Culture tools (src/tools/cookbook.ts).
+  //     search_local_culture reads the shared embedding space narrowed to
+  //     entity_type 'recipe', and get_recipe reads the whole dish back through
+  //     PostgREST. Both are read-only. Like step 7, the answer depends on the
+  //     server's embedding configuration, so the assertions require only that a
+  //     returned hit can be opened in full - not that any particular dish exists.
+  console.log('\n7b. tools/call search_local_culture / get_recipe');
+  const recipes = await client.callTool({
+    name: 'search_local_culture',
+    arguments: { query: 'how do I make green curry' },
+  });
+  const recipesText = firstText(recipes);
+  const recipesJson = firstJson(recipes);
+  check('search_local_culture returned content', recipesText.length > 0);
+  check(
+    'search_local_culture answers without error',
+    !recipes.isError,
+    `method=${recipesJson?.method ?? '?'} - ${recipesText.replace(/\s+/g, ' ').slice(0, 120)}`,
+  );
+  if (!recipes.isError) {
+    check(
+      'search_local_culture labels its method',
+      recipesJson?.method === 'semantic' || recipesJson?.method === 'keyword',
+    );
+    check(
+      'search_local_culture carries a hit list',
+      Array.isArray(recipesJson?.hits),
+      `count=${recipesJson?.hits?.length}`,
+    );
+    const hit = Array.isArray(recipesJson?.hits) ? recipesJson.hits[0] : undefined;
+    check('a hit names its recipe entity', hit?.entityType === 'recipe', hit?.title);
+    if (hit?.entityId) {
+      const recipe = await client.callTool({
+        name: 'get_recipe',
+        arguments: { recipe: String(hit.entityId) },
+      });
+      const recipeText = firstText(recipe);
+      const recipeJson = firstJson(recipe);
+      check('get_recipe returned content', recipeText.length > 0);
+      check(
+        'get_recipe answers without error',
+        !recipe.isError,
+        recipeJson?.nameEn ?? recipeText.replace(/\s+/g, ' ').slice(0, 100),
+      );
+      if (!recipe.isError) {
+        check(
+          'get_recipe carries the full ingredients list',
+          Array.isArray(recipeJson?.ingredients),
+          `ingredients=${recipeJson?.ingredients?.length}`,
+        );
+        check('get_recipe carries the method', Array.isArray(recipeJson?.steps), `steps=${recipeJson?.steps?.length}`);
+        check('get_recipe names its source', typeof recipeJson?.source === 'string', recipeJson?.source);
+      }
+    } else {
+      console.log('        (the cookbook holds no recipes on this server, so get_recipe was not exercised)');
+    }
+  }
+
   // 8. tools/call on a Phase 2 stateful read - a live device-scoped PostgREST
   //    round trip. An unknown device id yields an honest empty state, not an error.
   console.log('\n8. tools/call get_my_deeds');
@@ -271,6 +398,35 @@ try {
   }
   console.log(
     `        ${podcasts.isError ? 'tool error' : 'result'}: ${podcastsText.replace(/\s+/g, ' ').slice(0, 160)}`,
+  );
+
+  // 9b. tools/call on the theme tool. Called with no theme it lists the themes;
+  //     called with one it returns that theme's shows. Same proxy dependency as
+  //     step 9, so an explaining tool error is again acceptable.
+  console.log('\n9b. tools/call get_podcasts_by_theme');
+  const themeList = await client.callTool({ name: 'get_podcasts_by_theme', arguments: {} });
+  const themeListText = firstText(themeList);
+  check('returned content', themeListText.length > 0);
+  if (themeList.isError) {
+    check('tool error explains itself', !/unknown reason/i.test(themeListText));
+  } else {
+    const parsed = firstJson(themeList);
+    check('payload carries a theme list', Array.isArray(parsed?.themes), `count=${parsed?.count}`);
+  }
+  const themed = await client.callTool({
+    name: 'get_podcasts_by_theme',
+    arguments: { theme: 'meditation' },
+  });
+  const themedText = firstText(themed);
+  check('returned content', themedText.length > 0);
+  if (themed.isError) {
+    check('tool error explains itself', !/unknown reason/i.test(themedText));
+  } else {
+    const parsed = firstJson(themed);
+    check('payload carries a feed list', Array.isArray(parsed?.feeds), `count=${parsed?.count}`);
+  }
+  console.log(
+    `        ${themed.isError ? 'tool error' : 'result'}: ${themedText.replace(/\s+/g, ' ').slice(0, 160)}`,
   );
 
   // 10. Notifications - the read routes, the SSE stream, and the 4d kill switch
@@ -354,12 +510,194 @@ try {
     check('stream refused with 503 while delivery is off', streamResponse.status === 503,
       `status=${streamResponse.status}`);
   }
+
+  // 11. MCP OAuth 2.1 discovery (src/oauth.ts). Alexa+ reads these two documents
+  //     before it will register the add-on, so they must be reachable and must
+  //     advertise S256. The token surface itself is only exercised when a client
+  //     secret is in scope - discovery is public, minting is not.
+  console.log('\n11. MCP OAuth 2.1 discovery');
+  const prmResponse = await fetch(apiUrl('/.well-known/oauth-protected-resource'));
+  const prm = prmResponse.ok ? await prmResponse.json() : null;
+  check('serves the protected-resource metadata', prmResponse.status === 200, `status=${prmResponse.status}`);
+  check('PRM names an authorization server', Array.isArray(prm?.authorization_servers) && prm.authorization_servers.length > 0,
+    JSON.stringify(prm?.authorization_servers));
+  check('PRM points at /mcp', typeof prm?.resource === 'string' && /\/mcp$/.test(prm.resource), prm?.resource);
+
+  const asResponse = await fetch(apiUrl('/.well-known/oauth-authorization-server'));
+  const asMeta = asResponse.ok ? await asResponse.json() : null;
+  check('serves the authorization-server metadata', asResponse.status === 200, `status=${asResponse.status}`);
+  check('advertises the token endpoint', typeof asMeta?.token_endpoint === 'string', asMeta?.token_endpoint);
+  check(
+    'advertises PKCE S256 (mandatory)',
+    Array.isArray(asMeta?.code_challenge_methods_supported) && asMeta.code_challenge_methods_supported.includes('S256'),
+    JSON.stringify(asMeta?.code_challenge_methods_supported),
+  );
+  check(
+    'supports both grant types',
+    ['client_credentials', 'authorization_code'].every((gt) => asMeta?.grant_types_supported?.includes(gt)),
+    JSON.stringify(asMeta?.grant_types_supported),
+  );
+
+  const clientId = process.env.MCP_OAUTH_CLIENT_ID ?? '';
+  const clientSecret = process.env.MCP_OAUTH_CLIENT_SECRET ?? '';
+  if (clientId && clientSecret) {
+    console.log('\n11b. Tier 1 client_credentials token is accepted by /mcp');
+    const tokenResponse = await fetch(apiUrl('/oauth/token'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }),
+    });
+    const tokenBody = tokenResponse.ok ? await tokenResponse.json() : null;
+    check('token endpoint issues a bearer token', typeof tokenBody?.access_token === 'string', `status=${tokenResponse.status}`);
+    check('token carries the service scope', tokenBody?.scope === 'mcp:service', tokenBody?.scope);
+    check('token has no refresh token', tokenBody?.refresh_token === undefined);
+    if (typeof tokenBody?.access_token === 'string') {
+      const oauthTransport = new StreamableHTTPClientTransport(new URL(URL_STRING), {
+        requestInit: { headers: { Authorization: `Bearer ${tokenBody.access_token}` } },
+      });
+      const oauthClient = new Client({ name: 'globie-mcp-oauth-verify', version: '1.0.0' });
+      try {
+        await oauthClient.connect(oauthTransport);
+        const { tools: oauthTools } = await oauthClient.listTools();
+        check('an OAuth token completes the handshake and lists tools', oauthTools.length === EXPECTED_TOOLS.length,
+          `${oauthTools.length} tool(s)`);
+      } finally {
+        await oauthClient.close().catch(() => {});
+      }
+    }
+  } else {
+    console.log('        (skipped token mint: set MCP_OAUTH_CLIENT_ID / MCP_OAUTH_CLIENT_SECRET to exercise it)');
+  }
+
+  // 12. Invalid input. The guide's isolated-testing step asks for tools to be
+  //     called with invalid input, and its tool-design step asks for failures
+  //     to be structured - enough for a host to ask a specific follow-up. Every
+  //     case below must be refused with an explanation: a schema violation (the
+  //     SDK raises InvalidParams before the handler runs) or a tool-level error
+  //     the tool writes itself. Silence, a crash or a bogus success all fail.
+  //     Nothing here can change state: adopt_species is refused on its range,
+  //     which is checked before its handler is reached.
+  console.log('\n12. invalid input');
+  await expectRefusal('search_local_culture refuses a missing query', 'search_local_culture', {});
+  await expectRefusal('get_recipe refuses a missing recipe', 'get_recipe', {});
+  await expectRefusal(
+    'search_forest_knowledge refuses an unknown entity_type',
+    'search_forest_knowledge',
+    { query: 'teak', entity_type: 'not-a-real-entity' },
+  );
+  await expectRefusal(
+    'adopt_species refuses an out-of-range quantity before it writes',
+    'adopt_species',
+    { species_id: 'kae-na', quantity: 0 },
+  );
+  await expectRefusal('the surface refuses an unknown tool', 'no_such_tool', {});
+
+  // A valid-schema call whose dish simply does not exist: the tool must explain
+  // itself and point at the recovery, rather than reporting a protocol error a
+  // host could only surface as "something went wrong".
+  const unknownDish = await client.callTool({
+    name: 'get_recipe',
+    arguments: { recipe: 'zzz not a dish in this book' },
+  });
+  check('get_recipe refuses an unknown dish', unknownDish.isError === true);
+  check(
+    'and tells the caller how to recover',
+    /search_local_culture/i.test(firstText(unknownDish)),
+    firstText(unknownDish).replace(/\s+/g, ' ').slice(0, 110),
+  );
+
+  // 13. MCP Apps UI (SEP-1865). Every tool names a `ui://` resource a host
+  //     mounts in a sandboxed iframe. Four archetype documents serve all
+  //     fifteen tools (src/ui/apps.ts), so this asserts: each document is
+  //     discoverable and reads as an MCP App (text/html;profile=mcp-app),
+  //     every tool declares _meta.ui.resourceUri pointing at one of them, and
+  //     a call returns the rich shape so a host without the extension still
+  //     gets the JSON text block.
+  console.log('\n13. MCP Apps UI (SEP-1865)');
+  const uiResources = resources.resources.filter(
+    (entry) => typeof entry.uri === 'string' && entry.uri.startsWith('ui://'),
+  );
+  const ARCHETYPE_SLUGS = ['card', 'list', 'carousel', 'map'];
+  for (const slug of ARCHETYPE_SLUGS) {
+    const entry = uiResources.find((resource) => resource.uri.startsWith(`ui://globie/${slug}-`));
+    check(`resources/list advertises the ${slug} App`, Boolean(entry), entry?.uri);
+    check(
+      `the ${slug} App is served as text/html;profile=mcp-app`,
+      entry?.mimeType === 'text/html;profile=mcp-app',
+      entry?.mimeType,
+    );
+  }
+
+  // Every tool must point at a document that was actually listed: a dangling
+  // resourceUri is a broken App, not a fallback.
+  const advertisedUris = new Set(uiResources.map((entry) => entry.uri));
+  const UI_WIRED_TOOLS = [
+    'describe_species', 'describe_photo', 'get_recipe', 'get_eco_balance',
+    'adopt_species', 'generate_soundscape', 'get_soundscape',
+    'search_forest_knowledge', 'search_local_culture', 'recommend_species',
+    'get_my_deeds', 'search_podcasts', 'get_trending_podcasts',
+    'get_podcasts_by_theme', 'get_sanctuary_conditions',
+  ];
+  for (const name of UI_WIRED_TOOLS) {
+    const tool = tools.find((entry) => entry.name === name);
+    const uri = tool?._meta?.ui?.resourceUri;
+    check(
+      `${name} declares an advertised _meta.ui.resourceUri`,
+      typeof uri === 'string' && advertisedUris.has(uri),
+      uri ?? '(none)',
+    );
+  }
+
+  // One document read in full: the bytes must be a valid HTML5 page and the
+  // read content item must repeat the ui metadata the list entry declared.
+  const cardResource = uiResources.find((entry) => entry.uri.startsWith('ui://globie/card-'));
+  if (cardResource) {
+    const uiRead = await client.readResource({ uri: cardResource.uri });
+    const uiEntry = Array.isArray(uiRead?.contents) ? uiRead.contents[0] : undefined;
+    check(
+      'resources/read returns the App as text/html;profile=mcp-app',
+      uiEntry?.mimeType === 'text/html;profile=mcp-app',
+      uiEntry?.mimeType,
+    );
+    check(
+      'the document is a valid HTML5 page',
+      typeof uiEntry?.text === 'string' &&
+        /^\s*<!doctype html>/i.test(uiEntry.text) &&
+        /<html[\s>]/i.test(uiEntry.text),
+      typeof uiEntry?.text === 'string' ? `${uiEntry.text.length} bytes` : '(no text)',
+    );
+    check(
+      'the read content item repeats the ui metadata',
+      uiEntry?._meta?.ui?.prefersBorder === true,
+      JSON.stringify(uiEntry?._meta?.ui),
+    );
+  }
+
+  // The conditions call (made earlier) must carry the rich shape too.
+  const conditionsTool = tools.find((tool) => tool.name === 'get_sanctuary_conditions');
+  const conditionsUri = conditionsTool?._meta?.ui?.resourceUri;
+  if (!conditions.isError) {
+    check(
+      'a rich call carries structuredContent',
+      conditions.structuredContent !== undefined && typeof conditions.structuredContent === 'object',
+      typeof conditions.structuredContent,
+    );
+    check(
+      'and points at the same ui:// resource',
+      conditions._meta?.ui?.resourceUri === conditionsUri,
+      conditions._meta?.ui?.resourceUri,
+    );
+  } else {
+    console.log('        (skipped rich-result checks: the conditions call errored)');
+  }
 } catch (error) {
   failures += 1;
   console.error(`\nverification threw: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
   await client.close().catch(() => {});
 }
+
+await checkAddonAssets();
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

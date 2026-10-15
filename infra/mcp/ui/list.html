@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<!--
+  The Globie Earth "list" MCP App (SEP-1865 / io.modelcontextprotocol/ui).
+
+  One archetype document, shared by every tool that answers with a collection -
+  search_forest_knowledge, search_local_culture, recommend_species and
+  get_my_deeds. Which view to draw is read from the host's own
+  hostContext.toolInfo.tool.name (SEP-1865); a host that omits toolInfo falls
+  back to inferring the view from the payload's own shape. src/ui/apps.ts holds
+  the tool -> archetype mapping, and its names must match the VIEWS keys below.
+
+  Entirely self-contained - no external script, style, image or font - which is
+  what lets it run under the host's restrictive default CSP (connect-src
+  'none'), so `_meta.ui.csp` need not widen anything.
+
+  Authored at the Alexa+ design-guide's 768x480 base and scaled by one root
+  `zoom` (1.667 for the far-field Show 8/15, 1280x800). Light and dark are both
+  first-class. Touch targets are >=48x48.
+-->
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Globie Earth</title>
+    <style>
+      :root {
+        --ui-scale: 1;
+        --space-2: 2px;
+        --space-6: 6px;
+        --space-8: 8px;
+        --space-12: 12px;
+        --space-16: 16px;
+        --space-20: 20px;
+        --space-24: 24px;
+        --shape-8: 8px;
+        --shape-12: 12px;
+        --shape-16: 16px;
+        --shape-circle: 9999px;
+        --target: 48px;
+        --font-display: 40px;
+        --font-headline: 20px;
+        --font-title: 16px;
+        --font-body: 14px;
+        --font-caption: 12px;
+        --font-label: 10px;
+        --base-width: 768px;
+      }
+
+      /* Light and dark parity, keyed off hostContext.theme. Text tones are
+         picked for the required contrast (>=4.5:1 under 18px, >=3:1 at or
+         above). */
+      html[data-theme='dark'] {
+        --surface: #14181e;
+        --surface-inner: #1b2028;
+        --text: #f2f4f7;
+        --text-muted: #aab3c0;
+        --border: #2b323c;
+        --button: #2d415e;
+        --button-text: #eaf0f8;
+        --accent: #58c06a;
+      }
+      html[data-theme='light'] {
+        --surface: #ffffff;
+        --surface-inner: #faf9fb;
+        --text: #171b21;
+        --text-muted: #49515e;
+        --border: #e2e4ea;
+        --button: #2d415e;
+        --button-text: #ffffff;
+        --accent: #2e7d32;
+      }
+
+      html {
+        zoom: var(--ui-scale);
+        background: transparent;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+        font-size: var(--font-body);
+        line-height: 1.35;
+      }
+
+      .card {
+        box-sizing: border-box;
+        width: var(--base-width);
+        max-width: 100%;
+        padding: var(--space-20);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-16);
+        background: var(--surface);
+      }
+
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-12);
+      }
+      .mark {
+        display: flex;
+        align-items: center;
+        gap: var(--space-8);
+        min-width: 0;
+      }
+      .leaf {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: var(--shape-circle);
+        background: var(--accent);
+      }
+      .brand {
+        font-size: var(--font-label);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+      .title {
+        margin: var(--space-2) 0 0;
+        font-size: var(--font-headline);
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      /* 48x48 minimum, whatever the label says. */
+      .toggle {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-6);
+        min-width: var(--target);
+        min-height: var(--target);
+        padding: 0 var(--space-12);
+        border: 0;
+        border-radius: var(--shape-12);
+        background: var(--button);
+        color: var(--button-text);
+        font: inherit;
+        font-size: var(--font-caption);
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .toggle[hidden] {
+        display: none;
+      }
+      .toggle:focus-visible {
+        outline: 3px solid var(--text);
+        outline-offset: 2px;
+      }
+
+      .summary {
+        margin: var(--space-16) 0 0;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+      }
+      .summary[hidden] {
+        display: none;
+      }
+
+      .results {
+        margin: var(--space-12) 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .result {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--space-16);
+        padding: var(--space-12) 0;
+        border-top: 1px solid var(--border);
+      }
+      .result-main {
+        min-width: 0;
+      }
+      .result-title {
+        margin: 0;
+        font-size: var(--font-title);
+        font-weight: 600;
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+      .result-text {
+        margin: var(--space-6) 0 0;
+        font-size: var(--font-body);
+        color: var(--text-muted);
+        overflow-wrap: anywhere;
+      }
+      .result-meta {
+        flex: none;
+        max-width: 40%;
+        text-align: right;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+        overflow-wrap: anywhere;
+      }
+      .badge {
+        display: inline-block;
+        margin-bottom: var(--space-6);
+        padding: var(--space-2) var(--space-8);
+        border: 1px solid var(--border);
+        border-radius: var(--shape-circle);
+        background: var(--surface-inner);
+        font-size: var(--font-label);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+
+      .note {
+        margin: var(--space-16) 0 0;
+        font-size: var(--font-caption);
+        color: var(--text-muted);
+      }
+      .note[hidden] {
+        display: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" id="card">
+      <div class="head">
+        <div class="mark">
+          <span class="leaf" aria-hidden="true"></span>
+          <div>
+            <div class="brand">Globie Earth</div>
+            <h1 class="title" id="heading">One moment…</h1>
+          </div>
+        </div>
+        <button class="toggle" id="toggle" type="button" hidden aria-label="Expand to fullscreen">
+          Fullscreen
+        </button>
+      </div>
+
+      <p class="summary" id="summary" hidden></p>
+      <ul class="results" id="results" aria-live="polite"></ul>
+      <p class="note" id="note" hidden></p>
+    </main>
+
+    <script>
+      (function () {
+        'use strict';
+
+        var APP_INFO = { name: 'globie-earth-list', version: '1.0.0' };
+        var root = document.documentElement;
+        var card = document.getElementById('card');
+        var headingEl = document.getElementById('heading');
+        var toggle = document.getElementById('toggle');
+        var summaryEl = document.getElementById('summary');
+        var resultsEl = document.getElementById('results');
+        var noteEl = document.getElementById('note');
+
+        var view = null;
+        var latest = null;
+
+        // ---- The postMessage JSON-RPC 2.0 bridge (SEP-1865) ------------------
+        // The view is a sandboxed, possibly opaque-origin iframe: the host frame
+        // is the only peer and postMessage is the only channel. No origin can be
+        // verified against, so messages from any frame other than our parent are
+        // ignored outright.
+        var nextId = 1;
+        var pending = Object.create(null);
+
+        function postToHost(message) {
+          window.parent.postMessage(message, '*');
+        }
+
+        function request(method, params) {
+          var id = 'globie-' + nextId++;
+          return new Promise(function (resolve) {
+            pending[id] = resolve;
+            postToHost({ jsonrpc: '2.0', id: id, method: method, params: params });
+          });
+        }
+
+        function notifyHost(method, params) {
+          postToHost({ jsonrpc: '2.0', method: method, params: params });
+        }
+
+        // ---- Size reporting --------------------------------------------------
+        var lastSize = '';
+        function reportSize() {
+          var size = Math.ceil(root.scrollWidth) + 'x' + Math.ceil(root.scrollHeight);
+          if (size === lastSize) return;
+          lastSize = size;
+          notifyHost('ui/notifications/size-changed', {
+            width: Math.ceil(root.scrollWidth),
+            height: Math.ceil(root.scrollHeight),
+          });
+        }
+
+        // ---- hostContext -----------------------------------------------------
+        var currentMode = 'inline';
+
+        function applyHostContext(context) {
+          if (!context) return;
+          if (context.theme === 'light' || context.theme === 'dark') {
+            root.setAttribute('data-theme', context.theme);
+          }
+          // One root scale, never per-element: author at 768x480, zoom 1.667 for
+          // the far-field Show 8/15 (1280x800).
+          var dimensions = context.containerDimensions || {};
+          var width = dimensions.maxWidth || dimensions.width || 0;
+          root.style.setProperty('--ui-scale', width >= 1024 ? '1.667' : '1');
+
+          currentMode = context.displayMode || 'inline';
+          var modes = context.availableDisplayModes || [];
+          toggle.hidden = !(modes.indexOf('inline') !== -1 && modes.indexOf('fullscreen') !== -1);
+          updateToggleLabel();
+          rememberToolName(context);
+          reportSize();
+        }
+
+        function rememberToolName(context) {
+          var tool = context && context.toolInfo && context.toolInfo.tool;
+          var name = tool && typeof tool.name === 'string' ? tool.name : null;
+          if (name && VIEWS[name]) {
+            view = name;
+            if (latest) render(latest);
+          }
+        }
+
+        function updateToggleLabel() {
+          var expand = currentMode !== 'fullscreen';
+          toggle.textContent = expand ? 'Fullscreen' : 'Exit';
+          toggle.setAttribute('aria-label', expand ? 'Expand to fullscreen' : 'Exit fullscreen');
+        }
+
+        // ---- Small DOM helpers ----------------------------------------------
+        function el(tag, className, text) {
+          var node = document.createElement(tag);
+          if (className) node.className = className;
+          if (text !== undefined && text !== null && text !== '') {
+            // textContent, never innerHTML: nothing the server returns is markup.
+            node.appendChild(document.createTextNode(String(text)));
+          }
+          return node;
+        }
+
+        function present(value) {
+          return value !== null && value !== undefined && value !== '';
+        }
+
+        function percent(value) {
+          if (typeof value !== 'number' || !isFinite(value)) return null;
+          return Math.round(value * 100) + '% match';
+        }
+
+        function plural(count, one, many) {
+          return count + ' ' + (count === 1 ? one : many);
+        }
+
+        /** One row: a title, an optional snippet, an optional right-hand meta. */
+        function row(item) {
+          var li = el('li', 'result');
+
+          var main = el('div', 'result-main');
+          if (present(item.badge)) main.appendChild(el('span', 'badge', item.badge));
+          main.appendChild(el('h2', 'result-title', item.title || 'Untitled'));
+          if (present(item.text)) main.appendChild(el('p', 'result-text', item.text));
+          li.appendChild(main);
+
+          if (present(item.meta)) li.appendChild(el('div', 'result-meta', item.meta));
+          return li;
+        }
+
+        function draw(rows) {
+          var items = [];
+          for (var i = 0; i < rows.length; i++) items.push(row(rows[i]));
+          resultsEl.replaceChildren.apply(resultsEl, items);
+        }
+
+        function setText(node, value) {
+          node.textContent = present(value) ? String(value) : '';
+          node.hidden = !present(value);
+        }
+
+        // ---- The views -------------------------------------------------------
+        // The two knowledge-base searches share one shape (hits with a title, a
+        // body and either matched terms or a similarity); the other two carry
+        // their own arrays.
+        function searchRows(payload) {
+          var hits = Array.isArray(payload.hits) ? payload.hits : [];
+          var rows = [];
+          for (var i = 0; i < hits.length; i++) {
+            var hit = hits[i] || {};
+            var meta = null;
+            if (Array.isArray(hit.matchedTerms) && hit.matchedTerms.length) {
+              meta = hit.matchedTerms.join(', ');
+            } else {
+              meta = percent(hit.similarity);
+            }
+            rows.push({ badge: hit.entityType, title: hit.title, text: hit.content, meta: meta });
+          }
+          return rows;
+        }
+
+        function matchSummary(payload, noun) {
+          var hits = Array.isArray(payload.hits) ? payload.hits : [];
+          var parts = [plural(hits.length, noun, noun + 's')];
+          if (present(payload.query)) parts.push('for “' + payload.query + '”');
+          if (payload.method === 'semantic') {
+            parts.push(payload.ranking === 'reranked' ? '· semantic, reranked' : '· semantic');
+          } else if (payload.method === 'keyword') {
+            parts.push('· keyword');
+          }
+          return parts.join(' ');
+        }
+
+        var VIEWS = {
+          search_forest_knowledge: function (payload) {
+            headingEl.textContent = 'Forest knowledge';
+            setText(summaryEl, matchSummary(payload, 'result'));
+            draw(searchRows(payload));
+          },
+
+          search_local_culture: function (payload) {
+            headingEl.textContent = 'Local culture';
+            setText(summaryEl, matchSummary(payload, 'result'));
+            draw(searchRows(payload));
+          },
+
+          recommend_species: function (payload) {
+            headingEl.textContent = 'Species for you';
+            var list = Array.isArray(payload.recommendations) ? payload.recommendations : [];
+            setText(summaryEl, plural(list.length, 'recommendation', 'recommendations'));
+            var rows = [];
+            for (var i = 0; i < list.length; i++) {
+              var item = list[i] || {};
+              rows.push({
+                title: item.name,
+                text: item.tagline,
+                meta: percent(item.similarity) || item.speciesId,
+              });
+            }
+            draw(rows);
+          },
+
+          get_my_deeds: function (payload) {
+            headingEl.textContent = 'My living deeds';
+            var deeds = Array.isArray(payload.deeds) ? payload.deeds : [];
+            setText(summaryEl, plural(deeds.length, 'living deed', 'living deeds'));
+            var rows = [];
+            for (var i = 0; i < deeds.length; i++) {
+              var deed = deeds[i] || {};
+              var stages = Array.isArray(deed.stages) ? deed.stages : [];
+              var stage = present(deed.stageIndex) ? stages[deed.stageIndex] : null;
+              var trees = present(deed.treesPlanted) ? deed.treesPlanted : null;
+              rows.push({
+                title: trees ? plural(trees, 'sapling', 'saplings') : 'Living Deed',
+                text:
+                  (present(deed.speciesId) ? deed.speciesId : '') +
+                  (present(deed.deedNo) ? ' · deed ' + deed.deedNo : ''),
+                meta: present(deed.progressPct) ? deed.progressPct + '%' + (stage ? ' · ' + stage : '') : stage,
+              });
+            }
+            draw(rows);
+          },
+        };
+
+        // When the host never names the tool, the payload's own shape still says
+        // which view it is.
+        function inferView(payload) {
+          if (!payload || typeof payload !== 'object') return null;
+          if (Array.isArray(payload.deeds)) return 'get_my_deeds';
+          if (Array.isArray(payload.recommendations)) return 'recommend_species';
+          if (Array.isArray(payload.hits)) {
+            return payload.hits.length && present(payload.hits[0].slug)
+              ? 'search_local_culture'
+              : 'search_forest_knowledge';
+          }
+          return null;
+        }
+
+        // ---- The tool result -------------------------------------------------
+        function extractPayload(params) {
+          if (!params) return null;
+          if (params.structuredContent) return params.structuredContent;
+          var block = Array.isArray(params.content) ? params.content[0] : null;
+          if (block && block.type === 'text') {
+            try {
+              return JSON.parse(block.text);
+            } catch (error) {
+              return null;
+            }
+          }
+          return null;
+        }
+
+        function render(payload) {
+          if (!payload) return;
+          latest = payload;
+          var name = view || inferView(payload);
+          var drawView = name ? VIEWS[name] : null;
+          summaryEl.hidden = true;
+          noteEl.hidden = true;
+          resultsEl.replaceChildren();
+          if (!drawView) {
+            headingEl.textContent = 'Result';
+            return;
+          }
+          headingEl.textContent = '';
+          drawView(payload);
+          setText(noteEl, payload.note);
+          reportSize();
+        }
+
+        function showPlaceholder(message) {
+          headingEl.textContent = 'One moment…';
+          summaryEl.hidden = true;
+          noteEl.hidden = true;
+          resultsEl.replaceChildren.apply(resultsEl, [row({ title: message || 'Searching…' })]);
+          reportSize();
+        }
+
+        // ---- Host messages ---------------------------------------------------
+        window.addEventListener('message', function (event) {
+          if (event.source !== window.parent) return;
+          var message = event.data;
+          if (!message || message.jsonrpc !== '2.0') return;
+
+          if (message.id !== undefined && pending[message.id]) {
+            var settle = pending[message.id];
+            delete pending[message.id];
+            settle(message.result);
+            return;
+          }
+
+          switch (message.method) {
+            case 'ui/notifications/tool-input':
+              showPlaceholder('Searching the sanctuary…');
+              break;
+            case 'ui/notifications/tool-result':
+              render(extractPayload(message.params));
+              break;
+            case 'ui/notifications/tool-cancelled':
+              showPlaceholder('That search was cancelled.');
+              break;
+            case 'ui/notifications/host-context-changed':
+              applyHostContext(message.params);
+              break;
+            case 'ui/resource-teardown':
+              break;
+            default:
+              break;
+          }
+        });
+
+        toggle.addEventListener('click', function () {
+          var target = currentMode === 'fullscreen' ? 'inline' : 'fullscreen';
+          // SEP-1865 names this parameter `mode`, and answers with the mode it
+          // actually set - which may differ from the one requested.
+          request('ui/request-display-mode', { mode: target }).then(function (result) {
+            currentMode = (result && result.mode) || target;
+            updateToggleLabel();
+            reportSize();
+          });
+        });
+
+        if ('ResizeObserver' in window) {
+          new ResizeObserver(reportSize).observe(card);
+        }
+
+        // ---- Handshake -------------------------------------------------------
+        request('ui/initialize', {
+          appInfo: APP_INFO,
+          appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+        })
+          .then(function (result) {
+            applyHostContext(result && result.hostContext);
+            notifyHost('ui/notifications/initialized', {});
+          })
+          .catch(function () {
+            /* no host: stay on the placeholder */
+          })
+          .then(reportSize);
+      })();
+    </script>
+  </body>
+</html>

@@ -29,6 +29,7 @@ import { getEmbeddingProvider } from './embed.js';
 import { resolveCaller, type Caller } from './identity.js';
 import { registerModerateRoute } from './moderate.js';
 import { notificationsHealth, registerNotificationsRoutes } from './notifications.js';
+import { oauthHealth, registerOAuthRoutes } from './oauth.js';
 import { registerForestPrompts } from './prompts/forest.js';
 import { pushDispatcherHealth, startPushDispatcher } from './pushDispatcher.js';
 import { registerCatalogResources } from './resources/catalog.js';
@@ -38,11 +39,21 @@ import { registerSpeechRoutes, speechHealth } from './speech.js';
 import { registerAdoptionTools } from './tools/adoption.js';
 import { registerCatalogTools } from './tools/catalog.js';
 import { registerConditionsTools } from './tools/conditions.js';
+import { registerCookbookTools } from './tools/cookbook.js';
 import { registerPhotoTools } from './tools/photo.js';
 import { registerPodcastTools } from './tools/podcast.js';
 import { registerStudioTools } from './tools/studio.js';
 import { registerWikiTools } from './tools/wiki.js';
+import { registerUiResources } from './ui/apps.js';
 import { registerWikiRoute } from './wiki-route.js';
+import { openmindConfigured } from './openmind/client.js';
+import { registerOpenmindCommunityTools } from './tools/openmind-community.js';
+import { registerOpenmindDestinationsTools } from './tools/openmind-destinations.js';
+import { registerOpenmindFlightsTools } from './tools/openmind-flights.js';
+import { registerOpenmindGuidesTools } from './tools/openmind-guides.js';
+import { registerOpenmindImpactTools } from './tools/openmind-impact.js';
+import { registerOpenmindToursTools } from './tools/openmind-tours.js';
+import { registerOpenmindTripsTools } from './tools/openmind-trips.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = '0.0.0.0';
@@ -100,9 +111,11 @@ function buildServer(caller: Caller): McpServer {
         'Globie Earth is a reforestation sanctuary in Isaan, Thailand. Use these tools ' +
         'to answer questions about its native species, sites and guardian lore, to ' +
         'recommend a species the listener might adopt, to report live sanctuary ' +
-        'conditions, and to find podcasts about the living world. A listener may also attach a ' +
-        'photo: describe_photo reads any photo, not only trees, using the vision model rather ' +
-        'than the catalogue. describe_species reads the English Wikipedia lead for one species ' +
+        'conditions, to find podcasts about the living world, and to explore local ' +
+        'culture through the sanctuary\'s own Thai cookbook (search_local_culture, then ' +
+        'get_recipe for the full ingredients and method). A listener may also attach a ' +
+        'photo: describe_photo reads any photo, not only trees. describe_species reads the ' +
+        'English Wikipedia lead for one species ' +
         'by name - that is external reference text under CC BY-SA, so name Wikipedia as the ' +
         'source and never present it as Globie data. Adoption and soundscape ' +
         'tools are mutating and must be confirmed by the listener first; a soundscape is ' +
@@ -112,6 +125,7 @@ function buildServer(caller: Caller): McpServer {
   );
 
   registerCatalogTools(server, caller);
+  registerCookbookTools(server, caller);
   registerConditionsTools(server);
   registerWikiTools(server);
   registerPhotoTools(server);
@@ -119,8 +133,20 @@ function buildServer(caller: Caller): McpServer {
   registerStudioTools(server, caller);
   registerPodcastTools(server, caller);
 
+  // Openmind.Travel tools: the same travel catalogue (tours, guides, flights,
+  // community, trip planning, impact) the web app exposes via browser-side
+  // WebMCP, re-served here as MCP tools over the public REST API.
+  registerOpenmindToursTools(server);
+  registerOpenmindGuidesTools(server);
+  registerOpenmindDestinationsTools(server);
+  registerOpenmindFlightsTools(server);
+  registerOpenmindCommunityTools(server);
+  registerOpenmindTripsTools(server);
+  registerOpenmindImpactTools(server);
+
   registerCatalogResources(server, caller);
   registerDeedResources(server, caller);
+  registerUiResources(server);
 
   registerForestPrompts(server);
 
@@ -162,11 +188,16 @@ app.get('/health', () => {
     proxies: {
       studio: Boolean(process.env.STUDIO_URL?.trim()),
       podcast: Boolean(process.env.PODCAST_URL?.trim()),
+      openmind: openmindConfigured(),
     },
     auth: {
       staticBearer: Boolean(process.env.MCP_BEARER_TOKEN?.trim()),
       demoDevice: Boolean(process.env.MCP_DEMO_DEVICE_ID?.trim()),
     },
+    // The MCP OAuth 2.1 surface Alexa+ requires before it will register this
+    // server (oauth.ts). Dormant until MCP_OAUTH_SECRET is set, like every other
+    // optional neighbour - unset only disables this path, never /mcp itself.
+    oauth: oauthHealth(),
   };
 });
 
@@ -183,9 +214,9 @@ app.all('/mcp', async (request, reply) => {
   if (!caller) {
     return reply.code(401).send({
       error:
-        'This MCP server needs a caller identity: a valid X-Device-Id header, or ' +
-        'Authorization: Bearer <MCP_BEARER_TOKEN> when a demo device id is configured. ' +
-        'See infra/mcp/README.md.',
+        'This MCP server needs a caller identity: a valid X-Device-Id header, an MCP ' +
+        'OAuth 2.1 access token, or Authorization: Bearer <MCP_BEARER_TOKEN> when a demo ' +
+        'device id is configured. See infra/mcp/README.md.',
     });
   }
 
@@ -303,6 +334,11 @@ async function main(): Promise<void> {
     // so it has to be an exposed header on a cross-origin reply.
     exposedHeaders: ['mcp-session-id'],
   });
+
+  // The MCP OAuth 2.1 discovery + token surface (oauth.ts). It sits beside /mcp
+  // because Alexa+ reads it before it will register the server, and the tokens
+  // it issues are then accepted by /mcp the same way the static bearer is.
+  registerOAuthRoutes(app);
 
   // The natural-language router. It sits beside /mcp rather than inside it: the
   // browser host reads tools/list over MCP, posts the utterance here, then makes

@@ -327,6 +327,21 @@ geocode lookup. Rather than manufacture an opinion about an API we did not build
 against, this is recorded as "nothing to review here". If the wider app uses OSM
 for map tiles, that is a different surface and would need its own log.
 
+## Local Culture (Openmind Kitchen Cookbook) — first-party content, not a third-party API
+
+**Status: nothing external to review.** The `search_local_culture` and
+`get_recipe` tools read Globie Earth's **own** cookbook, "Cookbook Version Kai &
+Shea" (Openmind Projects). It is not an external API or SDK, so there is no
+vendor opinion to record here — the text was curated by hand into
+`scripts/data/cookbook-recipes.json`, imported by `npm run import:cookbook`, and
+embedded into the same flat `api.embeddings` space the forest data uses. The
+only integration friction was on **our** side, not a vendor's: the free-text
+ingredients, numbered steps and tips are `jsonb` so the importer stays a plain
+upsert, and a spoken dish name is resolved through a case-insensitive
+`or=(name_en.ilike.*…*,name_local.ilike.*…*)` PostgREST filter rather than an
+exact slug — a shape the search tool documents so a host knows a name works as
+well as an id.
+
 ## Friction log (requests we would file upstream)
 
 1. **MCP SDK — `resources/read` fails with `-32603 Invalid URL` for a
@@ -348,12 +363,30 @@ for map tiles, that is a different surface and would need its own log.
 7. **Wikipedia (Action API) — the licence and canonical credit URL are not part
    of the `extracts` response**, so the caller must reconstruct the CC BY-SA
    attribution itself.
+8. **Alexa+ — the `< 500 ms` round-trip requirement is incompatible with a
+   remote LLM rerank over a LAN-hosted server, and nothing in the platform
+   guidance names the tradeoff.** A live `search_forest_knowledge` measured
+   **21.6 s per search** on 2026-10-15 (the 20 s rerank cap expiring, then
+   falling back to cosine anyway) — ~40× the budget. The only ways we found to
+   comply were to *skip* the model call outright or move it in-process; a
+   shorter timeout still attempts the multi-second call and burns the whole
+   budget before failing. We added a `SEARCH_LATENCY_BUDGET_MS` ceiling that
+   makes an Alexa-facing deployment skip the rerank and serve the in-process
+   cosine order immediately (measured **0 ms**, no network call). Request: the
+   platform should document the latency ceiling expected of MCP tools and
+   whether a listwise rerank is viable at all inside it.
 
 ---
 
-_Last updated: 2026-10-09. The default embedding path is now self-hosted and
-measured; the Titan latency/cost rows remain pending a live Bedrock run
+_Last updated: 2026-10-15. Phase 3 of the MCP plan added the
+`SEARCH_LATENCY_BUDGET_MS` ceiling and its friction-log item 8 (the reproduced
+~21.6 s rerank against the Alexa+ `< 500 ms` round-trip); Phase 4 verified that
+the server down-negotiates the Alexa+ client's `2025-03-26` protocol version.
+The default embedding path is now self-hosted and measured; the Titan
+latency/cost rows remain pending a live Bedrock run
 (`EMBEDDING_PROVIDER=bedrock node scripts/bench-embed.mjs`). The Wikipedia
 (Action API) entry and its two friction-log items were added with the
-`describe_species` tool and the `GET /wiki` route. Everything else is written
-from the build._
+`describe_species` tool and the `GET /wiki` route. The cookbook layer
+(`api.cookbook_recipes` and the `search_local_culture` / `get_recipe` tools) was
+added from the project's own book, with no new third-party API. Everything else
+is written from the build._

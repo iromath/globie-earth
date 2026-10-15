@@ -1,4 +1,4 @@
-// Read-only catalogue resources: species, guardians, sites, and the DNP data.
+// Read-only catalogue resources: species, guardians, sites, and the forest datasets.
 //
 // The resources half of the MCP surface - the same catalogue rows the app
 // renders, addressed by URI and (for the small tables) discoverable through each
@@ -7,10 +7,10 @@
 // world-readable, so the caller's
 // identity does not narrow what comes back. The payloads mirror src/lib/api.ts's
 // own row-to-view mapping rather than re-inventing field names, so a host reads
-// the same shape the screens do. The DNP data (the biodiversity survey, the
-// national plant checklist, the national-park fauna observations and the
-// national wildlife checklist) is external reference data, not the adoptable
-// catalogue, and all four are too large to enumerate.
+// the same shape the screens do. The four forest datasets (the biodiversity
+// survey, the national plant checklist, the national-park fauna observations and
+// the national wildlife checklist) are Globie Earth's own reference data, and all
+// four are too large to enumerate.
 //
 // URIs carry the globie:// scheme because the MCP SDK parses a resource uri
 // with `new URL()` before it dispatches, so a bare relative uri such as
@@ -380,7 +380,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     },
   );
 
-  // The DNP survey is ~61k rows, so this template deliberately has no list
+  // The biodiversity survey is ~61k rows, so this template deliberately has no list
   // callback (the SDK requires it be passed explicitly, even as undefined): the
   // resources/list surface stays small, and a record is read by the id a search
   // hit already returned. The id is an integer column (bigserial), so a
@@ -390,22 +390,20 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     'dnp-species',
     new ResourceTemplate('globie://dnp/{id}', { list: undefined }),
     {
-      title: 'DNP biodiversity survey record',
+      title: 'Biodiversity survey record',
       description:
-        'One surveyed species record from the Thai Department of National Parks ' +
-        'biodiversity survey, by its numeric id. External reference data under the Open ' +
-        'Data Common licence - not part of the adoptable Globie catalogue.',
+        'One surveyed species record from the protected-area biodiversity survey, by its ' +
+        'numeric id.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {
       const id = scalar(variables.id);
-      if (!/^\d+$/.test(id)) missing(uri, 'DNP survey record', id);
+      if (!/^\d+$/.test(id)) missing(uri, 'survey record', id);
       const row = await first<DnpRow>(`dnp_species?select=*&id=eq.${id}&limit=1`, caller);
-      if (!row) missing(uri, 'DNP survey record', id);
+      if (!row) missing(uri, 'survey record', id);
       const wikipedia = await wikipediaFor(row.scientific_name);
       return asResource(uri, {
         id: row.id,
-        source: 'dnp',
         scientificName: row.scientific_name ?? undefined,
         thaiName: row.thai_name ?? undefined,
         family: row.family ?? undefined,
@@ -436,23 +434,20 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     'dnp-plant',
     new ResourceTemplate('globie://dnp-plant/{id}', { list: undefined }),
     {
-      title: 'DNP plant checklist record',
+      title: 'Plant checklist record',
       description:
-        'One species from the Thai Department of National Parks national plant checklist ' +
-        '(species recorded in Thailand), by its numeric id, with an English common name ' +
-        'resolved from GBIF where one exists. External reference data under the Open Data ' +
-        'Common licence - not part of the adoptable Globie catalogue.',
+        'One species from the national plant checklist (species recorded in Thailand), by ' +
+        'its numeric id, with an English common name resolved from GBIF where one exists.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {
       const id = scalar(variables.id);
-      if (!/^\d+$/.test(id)) missing(uri, 'DNP plant checklist record', id);
+      if (!/^\d+$/.test(id)) missing(uri, 'plant checklist record', id);
       const row = await first<DnpPlantRow>(`dnp_plants?select=*&id=eq.${id}&limit=1`, caller);
-      if (!row) missing(uri, 'DNP plant checklist record', id);
+      if (!row) missing(uri, 'plant checklist record', id);
       const wikipedia = await wikipediaFor(row.scientific_name);
       return asResource(uri, {
         id: row.id,
-        source: 'dnp',
         scientificName: row.scientific_name,
         thaiName: row.thai_name ?? undefined,
         family: row.family ?? undefined,
@@ -509,23 +504,20 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     'dnp-fauna',
     new ResourceTemplate('globie://dnp-fauna/{id}', { list: undefined }),
     {
-      title: 'DNP national-park fauna observation',
+      title: 'National-park fauna observation',
       description:
-        'One fauna record from the Thai Department of National Parks survey of species ' +
-        'observed inside protected areas, by its numeric id - with the park, taxonomy and ' +
-        'IUCN/ONEP/CITES conservation status. External reference data under the Open Data ' +
-        'Common licence - not part of the adoptable Globie catalogue.',
+        'One fauna record from the survey of species observed inside protected areas, by ' +
+        'its numeric id - with the park, taxonomy and IUCN/ONEP/CITES conservation status.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {
       const id = scalar(variables.id);
-      if (!/^\d+$/.test(id)) missing(uri, 'DNP fauna record', id);
+      if (!/^\d+$/.test(id)) missing(uri, 'fauna record', id);
       const row = await first<DnpFaunaRow>(`dnp_fauna?select=*&id=eq.${id}&limit=1`, caller);
-      if (!row) missing(uri, 'DNP fauna record', id);
+      if (!row) missing(uri, 'fauna record', id);
       const wikipedia = await wikipediaFor(row.scientific_name);
       return asResource(uri, {
         id: row.id,
-        source: 'dnp',
         scientificName: row.scientific_name ?? undefined,
         thaiName: row.thai_name ?? undefined,
         thaiNameAlt: row.thai_name_alt ?? undefined,
@@ -567,7 +559,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
   );
 
   // The national wildlife checklist is ~2k rows, so exactly like the other three
-  // DNP layers this template has no list callback (the SDK requires it be passed
+  // forest datasets this template has no list callback (the SDK requires it be passed
   // explicitly, even as undefined): the resources/list surface stays small, and a
   // record is read by the id a search hit already returned. The id is a
   // bigserial, so a non-numeric segment can never match and is reported as
@@ -576,23 +568,21 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     'dnp-wildlife',
     new ResourceTemplate('globie://dnp-wildlife/{id}', { list: undefined }),
     {
-      title: 'DNP national wildlife checklist record',
+      title: 'National wildlife checklist record',
       description:
-        'One species from the Thai Department of National Parks national wildlife ' +
-        'checklist (birds, mammals, reptiles, amphibians), by its numeric id, with the ' +
-        'statutory protected/reserved flags and ONEP/IUCN/CITES status. External reference ' +
-        'data under the Open Data Common licence - not part of the adoptable Globie catalogue.',
+        'One species from the national wildlife checklist (birds, mammals, reptiles, ' +
+        'amphibians), by its numeric id, with the statutory protected/reserved flags and ' +
+        'ONEP/IUCN/CITES status.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {
       const id = scalar(variables.id);
-      if (!/^\d+$/.test(id)) missing(uri, 'DNP wildlife record', id);
+      if (!/^\d+$/.test(id)) missing(uri, 'wildlife record', id);
       const row = await first<DnpWildlifeRow>(`dnp_wildlife?select=*&id=eq.${id}&limit=1`, caller);
-      if (!row) missing(uri, 'DNP wildlife record', id);
+      if (!row) missing(uri, 'wildlife record', id);
       const wikipedia = await wikipediaFor(row.scientific_name);
       return asResource(uri, {
         id: row.id,
-        source: 'dnp',
         scientificName: row.scientific_name,
         thaiName: row.thai_name ?? undefined,
         englishName: row.english_name ?? undefined,

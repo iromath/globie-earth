@@ -35,6 +35,17 @@ const ORIGIN_VAR: Record<ProxyService, string> = {
   podcast: 'PODCAST_URL',
 };
 
+/**
+ * The env var each service's *public* origin is read from, when it differs from
+ * the origin this server calls. The call origin is often a compose service name
+ * (`http://studio:8080`) that no listener can reach, while the public one
+ * (`https://studio.globie.earth`) is what a browser or a device fetches from.
+ */
+const PUBLIC_ORIGIN_VAR: Record<ProxyService, string> = {
+  studio: 'STUDIO_PUBLIC_URL',
+  podcast: 'PODCAST_PUBLIC_URL',
+};
+
 /** Read lazily, so /health can answer without either origin configured. */
 function origin(service: ProxyService): string {
   const name = ORIGIN_VAR[service];
@@ -47,6 +58,30 @@ function origin(service: ProxyService): string {
     );
   }
   return value;
+}
+
+/**
+ * Turns a service-relative URL into a full one a listener can fetch.
+ *
+ * The proxies answer with paths relative to themselves - `get_soundscape` reads
+ * the studio's `audioUrl`, which studio/src/server.ts keeps relative on purpose
+ * because the proxy does not know its own public origin. A browser resolves that
+ * path against the studio's public origin; this server knows the origin, so it
+ * can hand any host - Alexa+ included - a URL that needs no such mapping. An
+ * already-absolute URL is returned untouched, and with no public origin
+ * configured the path is left relative for the client to resolve as before.
+ */
+export function publicUrl(service: ProxyService, path: string | null): string | null {
+  if (!path) return null;
+  // Any scheme (`https://…`, `s3://…`) means someone already made it absolute.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) return path;
+  const publicOrigin = process.env[PUBLIC_ORIGIN_VAR[service]]?.trim().replace(/\/+$/, '');
+  if (!publicOrigin) return path;
+  try {
+    return new URL(path, `${publicOrigin}/`).toString();
+  } catch {
+    return path;
+  }
 }
 
 interface ProxyRequest {

@@ -18,6 +18,7 @@
     "import:dnp-plants": "node --env-file=../.env scripts/import-dnp-plants.mjs",
     "import:dnp-fauna": "node --env-file=../.env scripts/import-dnp-fauna.mjs",
     "import:dnp-wildlife": "node --env-file=../.env scripts/import-dnp-wildlife.mjs",
+    "import:cookbook": "node --env-file=../.env scripts/import-cookbook.mjs",
     "enrich:dnp-plants": "node --env-file=../.env scripts/enrich-dnp-plants.mjs",
     "enrich:dnp-media": "node --env-file=../.env scripts/enrich-dnp-media.mjs",
     "watch:embeddings": "node --env-file=../.env scripts/watch-bedrock.mjs",
@@ -25,6 +26,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1146.0",
+    "@aws-sdk/client-polly": "^3.1151.0",
     "@aws-sdk/client-s3": "^3.1147.0",
     "@fastify/cors": "^11.3.0",
     "@huggingface/transformers": "^4.3.1",

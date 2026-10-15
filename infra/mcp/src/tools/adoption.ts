@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { listDeeds, toDeed } from '../deeds.js';
 import type { Caller } from '../identity.js';
 import { get, rpc } from '../postgrest.js';
+import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 /**
@@ -82,6 +83,7 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
           ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: { ui: { resourceUri: uiUriForTool('adopt_species') } },
     },
     async ({ species_id, quantity, reference }) => {
       try {
@@ -143,6 +145,11 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
               : null,
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('adopt_species'),
+            invoking: 'Recording the adoption…',
+            invoked: `Living Deed ${adoption.deed.deed_no}`,
+          },
         );
       } catch (error) {
         return errorResult(error);
@@ -159,6 +166,7 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
         'each with its deed number, species, saplings planted, growth stage and progress. ' +
         'Read-only.',
       annotations: { readOnlyHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: uiUriForTool('get_my_deeds') } },
     },
     async () => {
       try {
@@ -178,6 +186,11 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
             note: rows.length ? null : 'This device has not adopted anything yet.',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('get_my_deeds'),
+            invoking: 'Reading your living deeds…',
+            invoked: 'Living deeds',
+          },
         );
       } catch (error) {
         return errorResult(error);
@@ -193,6 +206,7 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
         'The caller\'s current eco-token balance, summed across their devices. Eco-tokens ' +
         'are earned by adopting trees. Read-only.',
       annotations: { readOnlyHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: uiUriForTool('get_eco_balance') } },
     },
     async () => {
       try {
@@ -208,6 +222,11 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
             note: rows.length ? null : 'This device has never held eco-tokens.',
           },
           spoken,
+          {
+            resourceUri: uiUriForTool('get_eco_balance'),
+            invoking: 'Counting your eco-tokens…',
+            invoked: 'Eco-token balance',
+          },
         );
       } catch (error) {
         return errorResult(error);

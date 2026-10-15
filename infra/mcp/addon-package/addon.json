@@ -1,0 +1,79 @@
+{
+  "manifestVersion": "1.0",
+  "storeListing": {
+    "distributionCountries": ["US"],
+    "locales": {
+      "en-US": {
+        "default": "DEFAULT",
+        "name": {
+          "value": "Globie Earth",
+          "spokenForm": {
+            "format": "ipa",
+            "value": "ˈɡloʊbi ɜːrθ"
+          }
+        },
+        "shortDescription": "Ask a living forest anything, then plan a trip. Search its species guide, check sanctuary conditions, cook Thai recipes, adopt a tree, or search tours, flights and destinations.",
+        "fullDescription": "Explore a living forest in Isan, Thailand - and cook from its kitchen. Ask Globie Earth which tree fixes paddy soil, what the sanctuary is like at the wetland basin, or how to make green curry, and the answer comes back in a plain spoken sentence.\n\nYou're asking a real Field Guide, not a scraped website. Answers are assembled from Department of National Parks open data, and every reply says whether it was measured, modelled or explained.\n\n- Search the Field Guide for the forest's plants and animals\n- Check current conditions at the sanctuary\n- Cook from the project's own Thai cookbook, with ingredients and a numbered method read back to you\n- Adopt a tree and hear your deeds, eco balance and guardians\n- Plan a trip: search tours, flights, destinations and country guides from the Openmind.Travel catalogue\n- See the answer as an on-screen card, or just listen\n\nLink your Globie Earth account to keep your adopted tree, deeds and eco balance with you. The visual cards need an Echo Show 8 or larger; every answer still works by voice alone.",
+        "examplePhrases": [
+          "Explore the forest sanctuary",
+          "Search the forest guide for trees that fix paddy soil",
+          "How do I make green curry?",
+          "What's my eco balance?",
+          "Find tours in Bangkok",
+          "What's the cheapest flight from Bangkok to Chiang Mai?",
+          "Show me popular travel destinations"
+        ],
+        "privacyAndCompliance": {
+          "privacyPolicyUrl": "https://globie.earth/privacy-policy.html",
+          "termsOfUseUrl": "https://globie.earth/terms-policy.html"
+        },
+        "mediaAssets": {
+          "icons": {
+            "light": [
+              { "size": "72x72", "uri": "https://globie.earth/addon/icon-72x72.png" },
+              { "size": "64x64", "uri": "https://globie.earth/addon/icon-64x64.png" },
+              { "size": "88x88", "uri": "https://globie.earth/addon/icon-88x88.png" },
+              { "size": "126x126", "uri": "https://globie.earth/addon/icon-126x126.png" },
+              { "size": "180x180", "uri": "https://globie.earth/addon/icon-180x180.png" },
+              { "size": "241x241", "uri": "https://globie.earth/addon/icon-241x241.png" }
+            ],
+            "dark": [
+              { "size": "72x72", "uri": "https://globie.earth/addon/icon-72x72-dark.png" },
+              { "size": "64x64", "uri": "https://globie.earth/addon/icon-64x64-dark.png" },
+              { "size": "88x88", "uri": "https://globie.earth/addon/icon-88x88-dark.png" },
+              { "size": "126x126", "uri": "https://globie.earth/addon/icon-126x126-dark.png" },
+              { "size": "180x180", "uri": "https://globie.earth/addon/icon-180x180-dark.png" },
+              { "size": "241x241", "uri": "https://globie.earth/addon/icon-241x241-dark.png" }
+            ]
+          },
+          "carouselImages": [
+            {
+              "uri": "https://globie.earth/addon/carousel-1-600x900.png",
+              "altText": "The Globie Earth start screen: a dark-forest title with the sanctuary's guardians and the words Guardians of the Forest.",
+              "size": "600x900"
+            },
+            {
+              "uri": "https://globie.earth/addon/carousel-2-600x900.png",
+              "altText": "The species catalogue in Globie Earth, listing the forest's plants and animals straight from the Field Guide.",
+              "size": "600x900"
+            }
+          ],
+          "bannerImages": []
+        }
+      }
+    }
+  },
+  "integrations": [
+    {
+      "type": "MCP",
+      "config": {
+        "endpoints": {
+          "default": {
+            "type": "HTTPS",
+            "uri": "https://mcp.globie.earth/mcp"
+          }
+        }
+      }
+    }
+  ]
+}

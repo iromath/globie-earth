@@ -10,11 +10,16 @@
 //
 // A raw MCP client (the Alexa+ host, a curl client, a small web demo) will not
 // mint a GoTrue JWT just to try the server, so the demo accepts a static bearer
-// token that stands in for a device identity (decision D4). That is stated
-// honestly in the README rather than presented as OAuth: production should use
-// the MCP OAuth 2.1 flow, which is not built here.
+// token that stands in for a device identity (decision D4).
+//
+// The production credential is the MCP OAuth 2.1 access token issued by
+// oauth.ts (Tier 1 service / Tier 2 user); it is verified here first, and its
+// scoped device id becomes the caller. The static bearer remains as the honest
+// demo path beside it.
 
 import { timingSafeEqual } from 'node:crypto';
+
+import { verifyOAuthToken } from './oauth.js';
 
 export interface Caller {
   /** Always sent: the RPCs derive the caller from this header. */
@@ -51,6 +56,14 @@ export function resolveCaller(headers: Record<string, HeaderValue>): Caller | nu
   const deviceHeader = first(headers['x-device-id']);
   const authorization = first(headers.authorization);
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
+
+  // An OAuth 2.1 access token is the authoritative credential and is never
+  // forwarded onward - it is this edge's, not a GoTrue JWT - so it resolves
+  // before the device header and the demo secret.
+  if (token) {
+    const grant = verifyOAuthToken(token);
+    if (grant) return { deviceId: grant.deviceId };
+  }
 
   const staticToken = process.env.MCP_BEARER_TOKEN?.trim() || null;
   const isStaticToken = Boolean(token && staticToken && sameSecret(token, staticToken));
