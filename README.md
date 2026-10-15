@@ -1,10 +1,11 @@
 # Globie Earth — MCP server for Alexa+
 
 A self-hosted **[Model Context Protocol](https://modelcontextprotocol.io) server**
-that puts Globie Earth's reforestation backend in reach of an Alexa+ (or any MCP)
-host: the living catalogue of native species, sites and guardian lore, the
-adoption records, the sanctuary's conditions, and a self-hosted voice loop to ask
-about all of it.
+that puts Globie Earth's reforestation backend — and the Openmind.Travel travel
+catalogue — in reach of an Alexa+ (or any MCP) host: the living catalogue of
+native species, sites and guardian lore, the adoption records, the sanctuary's
+conditions, a self-hosted voice loop to ask about all of it, and a full travel
+surface to search tours, flights, destinations and guides.
 
 This repository **is the Amazon hackathon submission (Alexa+ track)**: the MCP
 server and the demo browser MCP client that proves a real MCP host can drive it.
@@ -14,13 +15,15 @@ server and the demo browser MCP client that proves a real MCP host can drive it.
 - **Protocol version:** `2025-11-25`, **pinned**. The server refuses to boot if
   the SDK's newest supported version ever moves past it, so this line cannot
   quietly become false.
-- **Surface:** 11 tools · 8 resources (7 URI templates + 1 static) · 2 prompts,
-  plus 8 browser side-routes and a `GET /health`.
+- **Surface:** 51 tools (15 Globie Earth + 36 Openmind.Travel) · 8 resources
+  (7 URI templates + 1 static) · 2 prompts, plus 8 browser side-routes and a
+  `GET /health`.
 - **Runs at:** `https://mcp.globie.earth`; the demo client at
   `https://mcp-client.globie.earth`.
 - **Backend:** Fastify + TypeScript on Node 22, self-hosted on an Easypanel
-  stack. Every byte of data comes over the live Globie Earth HTTP APIs — there is
-  no local database and nothing seeded.
+  stack. Every byte of data comes over the live HTTP APIs (PostgREST, studio,
+  podcast, and the Openmind.Travel catalogue) — there is no local database and
+  nothing seeded.
 
 Full detail — every tool's backend, the router, the voice cascade, the
 contribution pipeline, and the honest note on what the demo auth is *not* — lives
@@ -31,7 +34,7 @@ in [`infra/mcp/README.md`](infra/mcp/README.md).
 ## Quick start
 
 One command brings up the MCP server and the demo client. No `.env` is required:
-the three data origins default to the live Globie Earth APIs.
+the four data origins default to the live Globie Earth and Openmind.Travel APIs.
 
 ```bash
 cd infra
@@ -61,24 +64,48 @@ curl -s https://mcp.globie.earth/mcp \
 
 ## MCP surface
 
-### Tools (11)
+### Tools (51)
 
-Two change state (`adopt_species`, `generate_soundscape`); the rest are
-read-only.
+The surface is split into two groups: 15 **Globie Earth** tools (the sanctuary
+catalogue, deeds, soundscapes) and 36 **Openmind.Travel** tools (`om_*` prefix)
+covering tours, flights, destinations, guides, community, trip planning and
+impact. Four Globie tools change state (`adopt_species`, `generate_soundscape`,
+and the two `om_save_*` trip tools); the rest are read-only.
+
+#### Globie Earth (15)
 
 | Tool | What it does |
 | --- | --- |
-| `search_forest_knowledge` | Search species, sites and guardian lore — semantic by default, keyword fallback |
+| `search_forest_knowledge` | Search species, sites, guardian lore and the four DNP forest datasets — semantic by default, keyword fallback |
+| `search_local_culture` | Search the Thai cookbook collection by dish, ingredient, region or category |
+| `get_recipe` | One full recipe: names, region, ingredients, method and tips |
 | `recommend_species` | Recommend species from the caller's own past adoptions |
 | `get_sanctuary_conditions` | Ambient CO₂, European AQI, humidity and air temperature |
-| `describe_photo` | Describe an attached photo with a vision model |
+| `describe_photo` | Describe an attached photo with a vision model (DeepSeek or Amazon Bedrock Nova) |
 | `describe_species` | The English Wikipedia lead section for a species, by name |
 | `adopt_species` | Record an adoption (mutating; idempotent with a store transaction id) |
 | `get_my_deeds` | The Living Deeds issued for this caller's adoptions |
 | `get_eco_balance` | This caller's eco-token balance |
 | `generate_soundscape` | Queue a generated piece of music for the sanctuary (mutating) |
+| `get_soundscape` | Check a queued soundscape and return its audio URL when ready |
 | `search_podcasts` | Search the podcast library for shows about the living world |
 | `get_trending_podcasts` | List trending shows, optionally by category |
+| `get_podcasts_by_theme` | List listening themes, or the shows matching one theme |
+
+#### Openmind.Travel (36, `om_*` prefix)
+
+Wraps the Openmind.Travel REST catalogue (`https://bokunapi.9o9.io`). Full detail
+in [`infra/mcp/README.md`](infra/mcp/README.md#openmind-travel-tools-om_).
+
+| Group | Tools |
+| --- | --- |
+| **Tours** | `om_search_tours`, `om_get_tour_facets`, `om_get_tour`, `om_list_volunteer_projects`, `om_get_partner`, `om_search_suggestions` |
+| **Destinations** | `om_search_destinations`, `om_list_categories`, `om_list_countries`, `om_get_popular_destinations`, `om_autocomplete_airport` |
+| **Guides** | `om_list_country_guides`, `om_get_country_guide`, `om_search_youtube_videos`, `om_list_airline_guides`, `om_get_airline_guide` |
+| **Flights & transport** | `om_search_flights`, `om_get_flight_calendar`, `om_search_transport` |
+| **Community** | `om_get_globie_pet`, `om_list_community_posts`, `om_search_community_posts`, `om_get_community_post` |
+| **Trips** | `om_plan_trip`, `om_list_trip_ideas`, `om_get_trip_idea`, `om_save_trip_idea`, `om_get_itinerary`, `om_save_itinerary` |
+| **Impact** | `om_get_impact_overview`, `om_list_impact_causes`, `om_get_impact_cause`, `om_get_impact_travel_options`, `om_list_impact_treasures`, `om_get_impact_treasure`, `om_get_impact_stories` |
 
 ### Resources (8)
 
@@ -134,12 +161,12 @@ bypass RLS; calling the API is how that is avoided.
    browser client ──►│  /mcp  (Streamable HTTP)      │
                      └──────────────┬───────────────┘
                                     │  X-Device-Id / Bearer, forwarded
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                     ▼
-     api.globie.earth     studio.globie.earth     podcast.globie.earth
-     (PostgREST: species, (soundscape)            (podcasts)
-      guardians, sites,
-      deeds, DNP data)
+              ┌─────────────────────┼─────────────────────┬───────────────────┐
+              ▼                     ▼                     ▼                   ▼
+     api.globie.earth     studio.globie.earth     podcast.globie.earth  bokunapi.9o9.io
+     (PostgREST: species, (soundscape)            (podcasts)            (Openmind.Travel
+      guardians, sites,                                                    tours, flights,
+      deeds, DNP data)                                                      destinations)
 ```
 
 Only non-browser hosts (Alexa+) send no `Origin`; browser clients are matched
@@ -148,7 +175,7 @@ against `MCP_CORS_ORIGINS` literally.
 Two feature groups fail **closed and in isolation**, so the server always starts
 and reports what is unconfigured on `GET /health`: an unset `SPEECH_URL` disables
 only `/voice/*` (they answer a clear `503`), and unset `MINIO_*` disables only
-`/contribute`. Neither touches the eleven tools.
+`/contribute`. Neither touches the tools.
 
 ### Embeddings — Amazon Bedrock, self-hosted by default
 
@@ -177,11 +204,13 @@ accepts a **static bearer token** (`MCP_BEARER_TOKEN` in
 [`infra/.env.example`](infra/.env.example)). The server exchanges it, at the MCP
 edge, for `MCP_DEMO_DEVICE_ID` and never forwards the token onward.
 
-**This static token is not MCP OAuth 2.1, and this repository does not claim it
-is.** It is a shared demo secret standing in for a device identity, bounded to
-the single demo device — so the two mutating tools write only to that device on
-the live stack. The production path is Amazon's Alexa+ account linking (the OAuth
-2.1 Authorization Code Grant with PKCE S256); it is **not built here**.
+**This static token is not the only auth path.** It is a shared demo secret
+standing in for a device identity, bounded to the single demo device — so the
+mutating tools write only to that device on the live stack. The server also
+implements **MCP OAuth 2.1** (`src/oauth.ts`): a `client_credentials` grant for
+machine hosts and an Authorization Code Grant with PKCE S256 for user-facing
+hosts (the production path for Amazon's Alexa+ account linking). It is dormant
+until `MCP_OAUTH_SECRET` is set; `GET /health` reports `oauth.configured`.
 
 ---
 
