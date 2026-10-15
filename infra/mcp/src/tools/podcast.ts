@@ -9,7 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Caller } from '../identity.js';
-import { callProxy } from '../proxy.js';
+import { callProxy, publicUrl } from '../proxy.js';
 import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
@@ -47,6 +47,29 @@ interface PodcastTheme {
 
 interface ThemeList {
   themes: PodcastTheme[];
+}
+
+/** One episode as /v1/podcast/feeds/:id/episodes emits it. */
+interface PodcastEpisode {
+  id: number;
+  title: string;
+  /** The publisher's direct audio file URL (what a podcast app streams). */
+  enclosureUrl: string;
+  datePublished: string | null;
+  durationSec: number | null;
+  /** Per-episode cover art; falls back to the show's image. */
+  image: string | null;
+  feedId: number;
+  feedTitle: string | null;
+}
+
+interface EpisodeList {
+  episodes: PodcastEpisode[];
+}
+
+/** The /v1/podcast/audio response: a signed stream path relative to the proxy. */
+interface StreamUrl {
+  url: string;
 }
 
 export function registerPodcastTools(server: McpServer, caller: Caller): void {
@@ -244,6 +267,125 @@ export function registerPodcastTools(server: McpServer, caller: Caller): void {
             resourceUri: uiUriForTool('get_podcasts_by_theme'),
             invoking: 'Searching by theme…',
             invoked: `Theme: ${theme}`,
+          },
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_podcast_episodes',
+    {
+      title: 'Get podcast episodes',
+      description:
+        'Lists the episodes of one podcast show, newest first. Each episode carries ' +
+        'its title, the direct audio file URL (enclosureUrl), its per-episode cover ' +
+        'image, publish date and duration. This needs the upstream podcast index; ' +
+        'when it is not configured the tool says so instead of returning an empty ' +
+        'list. Read-only.',
+      inputSchema: {
+        feedId: z
+          .number()
+          .int()
+          .positive()
+          .describe('The numeric Podcast Index feed id, from search_podcasts or get_trending_podcasts.'),
+        max: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('How many episodes to return, newest first. Defaults to 20.'),
+        since: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('Only return episodes newer than this Unix timestamp. Omit for all.'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('get_podcast_episodes') } },
+    },
+    async ({ feedId, max, since }) => {
+      try {
+        const params = new URLSearchParams();
+        params.set('max', String(max ?? 20));
+        if (since !== undefined) params.set('since', String(since));
+        const { episodes } = await callProxy<EpisodeList>(
+          'podcast',
+          `/v1/podcast/feeds/${feedId}/episodes?${params.toString()}`,
+          caller,
+        );
+        const top = episodes[0];
+        const spoken = episodes.length
+          ? `${episodes.length} ${episodes.length === 1 ? 'episode' : 'episodes'} for this show. The newest is "${top.title}"${
+              top.durationSec !== null ? `, ${Math.round(top.durationSec / 60)} minutes` : ''
+            }.`
+          : 'This show has no episodes.';
+        return jsonResult(
+          {
+            count: episodes.length,
+            feedId,
+            episodes,
+            note: episodes.length ? null : 'This show has no episodes.',
+          },
+          spoken,
+          {
+            resourceUri: uiUriForTool('get_podcast_episodes'),
+            invoking: 'Fetching episodes…',
+            invoked: 'Podcast episodes',
+          },
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_podcast_stream_url',
+    {
+      title: 'Get podcast stream URL',
+      description:
+        'Mints a signed, time-limited proxy-stream URL for one episode audio file. ' +
+        'Use this when the publisher blocks direct playback of the enclosureUrl ' +
+        '(hotlink protection, Cloudflare challenge, etc.): our server fetches the ' +
+        'audio the way a podcast app would and streams it through. The URL expires ' +
+        'after two hours. Read-only.',
+      inputSchema: {
+        enclosureUrl: z
+          .string()
+          .min(8)
+          .max(2048)
+          .describe('The episode audio file URL (enclosureUrl from get_podcast_episodes).'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+      _meta: { ui: { resourceUri: uiUriForTool('get_podcast_stream_url') } },
+    },
+    async ({ enclosureUrl }) => {
+      try {
+        const { url } = await callProxy<StreamUrl>(
+          'podcast',
+          `/v1/podcast/audio?url=${encodeURIComponent(enclosureUrl)}`,
+          caller,
+        );
+        // The proxy returns a path relative to itself; make it absolute against
+        // the podcast public origin so any host can fetch it without knowing the
+        // mapping. Falls back to the relative path if no public origin is set.
+        const streamUrl = publicUrl('podcast', url) ?? url;
+        return jsonResult(
+          {
+            enclosureUrl,
+            streamUrl,
+            expiresInSec: 7200,
+          },
+          `Here is a stream link for that episode, good for two hours.`,
+          {
+            resourceUri: uiUriForTool('get_podcast_stream_url'),
+            invoking: 'Minting stream link…',
+            invoked: 'Podcast stream URL',
           },
         );
       } catch (error) {

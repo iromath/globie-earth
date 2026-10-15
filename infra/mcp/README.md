@@ -23,7 +23,7 @@ Action API, which is keyless and outside the stack entirely.
 
 ## Tools
 
-**51 tools in two groups.** The first group — 15 Globie Earth tools — exposes the
+**53 tools in two groups.** The first group — 17 Globie Earth tools — exposes the
 reforestation backend. Two of them change state (`adopt_species` and
 `generate_soundscape`); the rest are read-only. The second group — 36 **Openmind
 Travel** tools (prefixed `om_`) — wraps the Openmind.Travel REST catalogue
@@ -47,6 +47,8 @@ All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`
 | `search_podcasts` | Searches the podcast library for shows about the living world. | Podcast proxy `GET /v1/podcast/search` |
 | `get_trending_podcasts` | Lists shows trending in the podcast library, optionally by category. | Podcast proxy `GET /v1/podcast/trending` |
 | `get_podcasts_by_theme` | Lists the listening themes, or the shows matching one theme. | Podcast proxy `GET /v1/podcast/themes`, `GET /v1/podcast/bytheme` |
+| `get_podcast_episodes` | Lists a show's episodes (newest first), each with its direct audio file URL, per-episode cover art, publish date and duration. | Podcast proxy `GET /v1/podcast/feeds/:id/episodes` |
+| `get_podcast_stream_url` | Mints a signed, 2-hour proxy-stream URL for one episode's audio, for publishers that block direct hotlinking. | Podcast proxy `GET /v1/podcast/audio` |
 
 `adopt_species` changes real state, so it is annotated mutating
 (`readOnlyHint: false`). When the host passes the store's `reference`, a retry
@@ -120,7 +122,7 @@ The impact data (causes, treasures, stories) is served from static data baked
 into the server (`src/openmind/impactData.ts`); `om_get_impact_travel_options`
 is the one impact tool that hits the live tours/projects API.
 
-The browser MCP client (`infra/mcp-client/`) renders all 51 tools from
+The browser MCP client (`infra/mcp-client/`) renders all 53 tools from
 `tools/list` with no hard-coded list. Three trip-planning tools
 (`om_plan_trip`, `om_save_trip_idea`, `om_save_itinerary`) take `array` or
 `object` arguments; the client's form builder accepts those as JSON literals

@@ -131,6 +131,8 @@ export type ToolName =
   | 'search_podcasts'
   | 'get_trending_podcasts'
   | 'get_podcasts_by_theme'
+  | 'get_podcast_episodes'
+  | 'get_podcast_stream_url'
   | 'get_sanctuary_conditions';
 
 /**
@@ -155,6 +157,8 @@ const TOOL_ARCHETYPE: Record<ToolName, UiArchetype> = {
   search_podcasts: 'carousel',
   get_trending_podcasts: 'carousel',
   get_podcasts_by_theme: 'carousel',
+  get_podcast_episodes: 'list',
+  get_podcast_stream_url: 'card',
   get_sanctuary_conditions: 'map',
 };
 

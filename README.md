@@ -15,7 +15,7 @@ server and the demo browser MCP client that proves a real MCP host can drive it.
 - **Protocol version:** `2025-11-25`, **pinned**. The server refuses to boot if
   the SDK's newest supported version ever moves past it, so this line cannot
   quietly become false.
-- **Surface:** 51 tools (15 Globie Earth + 36 Openmind.Travel) · 8 resources
+- **Surface:** 53 tools (17 Globie Earth + 36 Openmind.Travel) · 8 resources
   (7 URI templates + 1 static) · 2 prompts, plus 8 browser side-routes and a
   `GET /health`.
 - **Runs at:** `https://mcp.globie.earth`; the demo client at
@@ -64,15 +64,16 @@ curl -s https://mcp.globie.earth/mcp \
 
 ## MCP surface
 
-### Tools (51)
+### Tools (53)
 
-The surface is split into two groups: 15 **Globie Earth** tools (the sanctuary
-catalogue, deeds, soundscapes) and 36 **Openmind.Travel** tools (`om_*` prefix)
-covering tours, flights, destinations, guides, community, trip planning and
-impact. Four Globie tools change state (`adopt_species`, `generate_soundscape`,
-and the two `om_save_*` trip tools); the rest are read-only.
+The surface is split into two groups: 17 **Globie Earth** tools (the sanctuary
+catalogue, deeds, soundscapes, and podcasts) and 36 **Openmind.Travel** tools
+(`om_*` prefix) covering tours, flights, destinations, guides, community, trip
+planning and impact. Four Globie tools change state (`adopt_species`,
+`generate_soundscape`, and the two `om_save_*` trip tools); the rest are
+read-only.
 
-#### Globie Earth (15)
+#### Globie Earth (17)
 
 | Tool | What it does |
 | --- | --- |
@@ -91,6 +92,8 @@ and the two `om_save_*` trip tools); the rest are read-only.
 | `search_podcasts` | Search the podcast library for shows about the living world |
 | `get_trending_podcasts` | List trending shows, optionally by category |
 | `get_podcasts_by_theme` | List listening themes, or the shows matching one theme |
+| `get_podcast_episodes` | List a show's episodes, each with its audio file URL and cover art |
+| `get_podcast_stream_url` | Mint a signed proxy-stream URL for an episode (for publishers that block hotlinking) |
 
 #### Openmind.Travel (36, `om_*` prefix)
 
