@@ -25,3 +25,6 @@ __pycache__/
 *.p12
 *service-account*.json
 *adminsdk*.json
+
+# Local-only hackathon working docs; not for the public repo.
+Dev-Docs/Amazon/
