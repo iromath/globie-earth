@@ -63,8 +63,8 @@ const ARCHETYPES: Record<UiArchetype, ArchetypeSpec> = {
     title: 'Globie Earth — result list',
     description:
       'The collection list. Draws a page of knowledge-base or culture hits, species ' +
-      'recommendations, or the listener\'s own living deeds, each with its matched terms ' +
-      'or similarity beside it.',
+      'recommendations, live web results, or the listener\'s own living deeds, each with ' +
+      'its matched terms, similarity or source beside it.',
   },
   carousel: {
     file: 'carousel.html',
@@ -78,9 +78,9 @@ const ARCHETYPES: Record<UiArchetype, ArchetypeSpec> = {
   map: {
     file: 'map.html',
     slug: 'map',
-    title: 'Globie Earth — sanctuary conditions',
+    title: 'Globie Earth — site conditions',
     description:
-      'The place view. Draws the sanctuary\'s coordinates on a locator plate beside its ' +
+      'The place view. Draws the site\'s coordinates on a locator plate beside its ' +
       'modelled air temperature, humidity, European air-quality index and ambient carbon ' +
       'dioxide.',
   },
@@ -133,6 +133,7 @@ export type ToolName =
   | 'get_podcasts_by_theme'
   | 'get_podcast_episodes'
   | 'get_podcast_stream_url'
+  | 'search_web'
   | 'get_sanctuary_conditions';
 
 /**
@@ -159,6 +160,7 @@ const TOOL_ARCHETYPE: Record<ToolName, UiArchetype> = {
   get_podcasts_by_theme: 'carousel',
   get_podcast_episodes: 'list',
   get_podcast_stream_url: 'card',
+  search_web: 'list',
   get_sanctuary_conditions: 'map',
 };
 

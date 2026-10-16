@@ -78,11 +78,11 @@ export function registerPodcastTools(server: McpServer, caller: Caller): void {
     {
       title: 'Search podcasts',
       description:
-        'Searches the Globie Earth podcast library for shows about reforestation, ' +
-        'conservation and the living world, each with its episode count and freshest ' +
-        'episode. Read-only.',
+        'Searches the Globie Earth podcast library by show title and author, each result ' +
+        'carrying its cover art, episode count and freshest episode. Every word in the ' +
+        'query must match, so keep it to one or two words. Read-only.',
       inputSchema: {
-        query: z.string().min(2).max(120).describe('What to search for, e.g. "soil carbon".'),
+        query: z.string().min(2).max(120).describe('What to search for, e.g. "forest" or "climate change".'),
         max: z
           .number()
           .int()
@@ -201,7 +201,7 @@ export function registerPodcastTools(server: McpServer, caller: Caller): void {
       description:
         'Explores the Globie Earth podcast library by listening theme. Called with no theme it ' +
         'lists the themes that exist; called with one it returns the shows matching that theme. ' +
-        'Themes are the shelf\'s own curated words - meditation, eco-meditation, sustainability ' +
+        'Themes are the shelf\'s own curated words - meditation, forest, sustainability ' +
         'and the like - which are full-text topics, not the index\'s publisher categories. ' +
         'Read-only.',
       inputSchema: {
@@ -211,7 +211,7 @@ export function registerPodcastTools(server: McpServer, caller: Caller): void {
           .max(64)
           .optional()
           .describe(
-            'A theme to list shows for, e.g. "eco-meditation" or "Eco-meditation". ' +
+            'A theme to list shows for, e.g. "forest" or "Forest". ' +
               'Omit it to list the available themes.',
           ),
         max: z

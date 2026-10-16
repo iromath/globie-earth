@@ -2,9 +2,9 @@
 //
 // The router can only ever pick a tool that exists, so before this one a photo
 // of something that was not a tree had nothing to match - every other tool
-// answers from the sanctuary's own catalogue. This is the one tool that can
+// answers from the site's own catalogue. This is the one tool that can
 // look at an arbitrary image: it hands the photo to the vision model and
-// returns what the model sees. It makes no claim about the sanctuary - the
+// returns what the model sees. It makes no claim about the site - the
 // description is the model's reading of the image, and the result says so.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -21,7 +21,7 @@ const DEFAULT_QUESTION = 'Describe this photo in detail.';
 
 /** The instruction the vision model answers under. */
 const SYSTEM_PROMPT = [
-  'You are the eyes of the Globie Earth MCP server, a reforestation sanctuary in Isaan, Thailand.',
+  'You are the eyes of the Globie Earth MCP server, a regenerative agroforestry site in Isaan, Thailand.',
   'Describe the attached photo plainly and concretely: what is in it, and anything a listener',
   'would want pointed out. If it shows a tree, plant or landscape, name what you can; if it shows',
   'anything else - a room, an object, a document, a person - describe that instead. You read any',
@@ -97,23 +97,25 @@ export function registerPhotoTools(server: McpServer): void {
             return errorResult(`The photo tool timed out after ${TIMEOUT_MS} ms.`);
           }
           if (error.kind === 'upstream') {
+            // Covers both a refused model call and a photo URL the server could
+            // not fetch: each says which, in `detail`.
             return errorResult(
-              `The vision model endpoint returned ${error.status}. ${error.detail}`.trim(),
+              `The vision model call failed with ${error.status}. ${error.detail}`.trim(),
             );
           }
           return errorResult('The photo tool could not reach its vision model endpoint.');
         }
 
         const description = result.text.trim();
-        const spoken = `Looking at the photo: ${description} That is the vision model's reading of the image, not the sanctuary catalogue.`;
+        const spoken = `Looking at the photo: ${description} That is the vision model's reading of the image, not the site catalogue.`;
         return jsonResult(
           {
             question: asked,
             description,
             model: result.model,
             // Said plainly: this is the model's reading of the image, not a fact
-            // from the sanctuary's own catalogue.
-            source: `${result.model} reading the attached photo (not the sanctuary catalogue)`,
+            // from the site's own catalogue.
+            source: `${result.model} reading the attached photo (not the site catalogue)`,
           },
           spoken,
           {

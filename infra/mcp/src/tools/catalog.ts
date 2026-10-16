@@ -482,7 +482,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
       title: 'Search the forest knowledge base',
       description:
         'Search the forest knowledge base: Globie Earth\'s own catalogue of native species, ' +
-        'sanctuary sites and guardian lore, together with its broader forest datasets - the ' +
+        'forest sites and guardian lore, together with its broader forest datasets - the ' +
         'protected-area biodiversity survey, the national plant checklist (with English ' +
         'common names, genus, synonyms and native status resolved from GBIF), the ' +
         'national-park fauna observations, and the national wildlife checklist with its ' +
@@ -615,7 +615,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         let ranking: 'reranked' | 'cosine' = 'cosine';
         let rerankModel: string | null = null;
         if (rerank.enabled && hits.length > 1) {
-          const outcome = await rerankHits(query, hits);
+          const outcome = await rerankHits(query, hits, caller.latencyBudgetMs);
           if (outcome) {
             ranked = outcome.order.map((index) => hits[index]);
             ranking = 'reranked';

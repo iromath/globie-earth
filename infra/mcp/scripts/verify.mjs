@@ -47,6 +47,8 @@ const EXPECTED_TOOLS = [
   // Phase 4 - the sanctuary's own Local Culture / Thai cookbook (src/tools/cookbook.ts).
   'search_local_culture',
   'get_recipe',
+  // Live web search for what the site's own records do not hold (src/tools/web.ts).
+  'search_web',
 ];
 const EXPECTED_TEMPLATES = [
   'globie://species/{id}',
@@ -386,7 +388,7 @@ try {
   console.log('\n9. tools/call search_podcasts');
   const podcasts = await client.callTool({
     name: 'search_podcasts',
-    arguments: { query: 'soil carbon' },
+    arguments: { query: 'forest' },
   });
   const podcastsText = firstText(podcasts);
   check('returned content', podcastsText.length > 0);
@@ -636,7 +638,7 @@ try {
     'adopt_species', 'generate_soundscape', 'get_soundscape',
     'search_forest_knowledge', 'search_local_culture', 'recommend_species',
     'get_my_deeds', 'search_podcasts', 'get_trending_podcasts',
-    'get_podcasts_by_theme', 'get_sanctuary_conditions',
+    'get_podcasts_by_theme', 'get_sanctuary_conditions', 'search_web',
   ];
   for (const name of UI_WIRED_TOOLS) {
     const tool = tools.find((entry) => entry.name === name);

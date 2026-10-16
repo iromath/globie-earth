@@ -11,6 +11,7 @@
 // Gemini and Podcast Index credentials; this server never holds either.
 
 import type { Caller } from './identity.js';
+import { ensureDevice } from './postgrest.js';
 
 /** A hung proxy must not pin an Alexa+ turn forever. */
 const TIMEOUT_MS = 10000;
@@ -84,6 +85,39 @@ export function publicUrl(service: ProxyService, path: string | null): string | 
   }
 }
 
+/**
+ * Builds the absolute https URL a device fetches for itself.
+ *
+ * This exists for an Echo's AudioPlayer, which has no page to resolve a relative
+ * path against and no way to hold an X-Device-Id. `publicUrl` already resolves
+ * against the public origin, but leaves the path relative when none is
+ * configured - fine for the browser, which maps the host itself
+ * (mcp-client/src/main.ts), and useless for a player. So this falls back to the
+ * call origin when that origin is itself https, which is the case in this stack
+ * (STUDIO_URL is already https://studio.globie.earth), and raises otherwise: a
+ * stream that cannot be fetched is a configuration error worth naming, not a
+ * silence to debug on the device.
+ */
+export function absoluteUrl(service: ProxyService, path: string | null): string | null {
+  if (!path) return null;
+  if (/^https:\/\//i.test(path)) return path;
+  const resolved = publicUrl(service, path);
+  if (resolved && /^https:\/\//i.test(resolved)) return resolved;
+  const callOrigin = process.env[ORIGIN_VAR[service]]?.trim().replace(/\/+$/, '');
+  if (callOrigin && /^https:\/\//i.test(callOrigin)) {
+    try {
+      return new URL(path, `${callOrigin}/`).toString();
+    } catch {
+      // Fall through to the error below.
+    }
+  }
+  throw new ProxyError(
+    `${service} has no https origin, so no playable URL can be built. Set ` +
+      `${PUBLIC_ORIGIN_VAR[service]} (or an https ${ORIGIN_VAR[service]}) - see infra/.env.example.`,
+    0,
+  );
+}
+
 interface ProxyRequest {
   method?: 'GET' | 'POST';
   body?: unknown;
@@ -99,6 +133,16 @@ export async function callProxy<T>(
   // Resolved before the try: an unset origin is a configuration error with its
   // own message, not a network failure to be re-worded.
   const url = `${origin(service)}${path}`;
+
+  // Both proxies refuse a device they have never seen - their requireDevice
+  // answers 401 "That device has not been registered by this app." - and they
+  // are right to, because the web clients register themselves on first launch.
+  // A voice caller cannot: its device id is derived from the Amazon userId
+  // (deviceIdFor in alexa.ts) rather than created by an app, so it has no row
+  // and every call would fail - the studio's soundscapes and the podcast
+  // library alike. Registering it first is the same lazy insert the app's own
+  // RPCs already do (infra/schema/090_starting_grant.sql).
+  if (service === 'studio' || service === 'podcast') await ensureDevice(caller);
 
   let response: Response;
   try {

@@ -142,8 +142,8 @@ interface Scan {
 
 /** The instruction the scanner answers under. Strict JSON, and nothing else. */
 const SYSTEM_PROMPT = [
-  'You are the safety and identity scanner behind Globie Earth, a reforestation',
-  'sanctuary in Isaan, Thailand. A visitor is offering one or more media files to',
+  'You are the safety and identity scanner behind Globie Earth, a regenerative',
+  'agroforestry site in Isaan, Thailand. A visitor is offering one or more media files to',
   'illustrate ONE named species on its page. A media file is either a photograph or',
   'a short video; a video is shown to you as a few stills sampled from the clip, each',
   'labelled as a frame of that same clip. The species is given to you by its',

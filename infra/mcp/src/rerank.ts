@@ -88,7 +88,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const SYSTEM_PROMPT = [
   "You rank passages by how directly each answers a listener's question, for a",
-  'reforestation sanctuary in Isaan, Thailand.',
+  'regenerative agroforestry site in Isaan, Thailand.',
   'You are given the question and a numbered list of candidate passages.',
   'Reply with JSON only, of the form {"order": [<candidate numbers, best first>]}.',
   'Include every candidate number exactly once.',
@@ -154,23 +154,36 @@ function parseOrder(content: string, count: number): number[] | null {
  * Reorders `hits` by how directly each answers `query`, or returns null so the
  * caller keeps the cosine order. Never throws: this stage is an enhancement, not
  * a dependency, so its failure must be invisible to the tool.
+ *
+ * `budgetMsOverride` is a front door's own deadline for this one call - the
+ * Alexa Skill sets it from `Caller.latencyBudgetMs` - and it takes precedence
+ * over the deployment-wide SEARCH_LATENCY_BUDGET_MS. That is what keeps the
+ * browser host reranking while the voice front door, which Alexa abandons after
+ * ~8s, skips the stage and answers from the local-embed path instead. The two
+ * share one process, so the decision has to travel on the request rather than
+ * on the environment.
  */
 export async function rerankHits(
   query: string,
   hits: RankableHit[],
+  budgetMsOverride?: number,
 ): Promise<RerankOutcome | null> {
   const { enabled, timeoutMs, budgetMs } = rerankConfig();
   const { provider, model } = rerankTarget();
   if (!enabled || !providerConfigured(provider) || hits.length < 2) return null;
 
   // Fast-path for a latency-bounded caller (the Alexa+ round-trip budget, plan
-  // §20.3 gap 4 / §21 Phase 3). The rerank is a remote model call whose hard cap
-  // is `timeoutMs`, so if that cap does not fit inside the caller's ceiling the
-  // stage cannot be allowed to run at all: skipping it here returns the
-  // in-process cosine order immediately, instead of burning the whole ceiling
-  // and falling back anyway (the ~21 s worst case reproduced live on
-  // 2026-10-15). A RERANK_TIMEOUT_MS at or below the budget re-enables it.
-  if (budgetMs > 0 && timeoutMs > budgetMs) return null;
+  // §20.3 gap 4 / §21 Phase 3, and now the Skill's own Caller.latencyBudgetMs).
+  // The rerank is a remote model call whose hard cap is `timeoutMs`, so if that
+  // cap does not fit inside the caller's ceiling the stage cannot be allowed to
+  // run at all: skipping it here returns the in-process cosine order
+  // immediately, instead of burning the whole ceiling and falling back anyway
+  // (the ~21 s worst case reproduced live on 2026-10-15, and again on
+  // 2026-10-16 when the Skill's forest answers timed out at Alexa and the
+  // server returned 200 twenty seconds later). A RERANK_TIMEOUT_MS at or below
+  // the budget re-enables it.
+  const ceiling = budgetMsOverride ?? budgetMs;
+  if (ceiling > 0 && timeoutMs > ceiling) return null;
 
   try {
     const result = await chat({

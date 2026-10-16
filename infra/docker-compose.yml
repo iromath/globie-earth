@@ -37,6 +37,12 @@ services:
       # explain themselves rather than looking like the whole server is down.
       STUDIO_URL: ${MCP_STUDIO_URL:-https://studio.globie.earth}
       PODCAST_URL: ${MCP_PODCAST_URL:-https://podcast.globie.earth}
+      # The same studio origin, as a listener's device sees it. An Echo's
+      # AudioPlayer fetches the mp3 itself and cannot resolve a relative path or
+      # carry X-Device-Id, so it must be handed a full https URL; the studio
+      # answers audioUrl relative to itself on purpose (see proxy.ts,
+      # absoluteUrl). Defaults to the live origin, like the two above.
+      STUDIO_PUBLIC_URL: ${MCP_STUDIO_PUBLIC_URL:-https://studio.globie.earth}
       # A raw MCP client that cannot mint a GoTrue JWT sends
       # `Authorization: Bearer <MCP_BEARER_TOKEN>` and the server exchanges it,
       # at the edge, for MCP_DEMO_DEVICE_ID — never forwarding the token onward.

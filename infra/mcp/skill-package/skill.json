@@ -1,0 +1,56 @@
+{
+  "manifestVersion": "1.0",
+  "publishingInformation": {
+    "locales": {
+      "en-US": {
+        "name": "Globie Earth",
+        "summary": "Ask a living forest anything, then cook from its kitchen and plan a trip: species guide, Thai recipes, tree adoption, tours and flights.",
+        "description": "Explore a living forest in Isan, Thailand - and cook from its kitchen. Ask Globie Earth which tree fixes paddy soil, what the site is like at the wetland basin, or how to make green curry, and the answer comes back in a plain spoken sentence.\n\nYou're asking a real Field Guide, not a scraped website. Answers are assembled from Department of National Parks open data, and every reply says whether it was measured, modelled or explained.\n\n- Search the Field Guide for the forest's plants and animals\n- Check current conditions at the site\n- Cook from the project's own Thai cookbook, with ingredients and a numbered method read back to you\n- Adopt a tree and hear your deeds, eco balance and guardians\n- Plan a trip: search tours, flights, destinations and country guides from the Openmind.Travel catalogue\n\nSay, Alexa, ask Globie Earth about trees that fix paddy soil. To keep your adopted tree, deeds and eco balance with you, link your Globie Earth account in the Alexa app.",
+        "examplePhrases": [
+          "ask Globie Earth about trees that fix paddy soil",
+          "ask Globie Earth what the site is like",
+          "ask Globie Earth to find tours in Bangkok",
+          "ask Globie Earth how to make green curry"
+        ],
+        "keywords": [
+          "forest",
+          "reforestation",
+          "thailand",
+          "species",
+          "recipes",
+          "travel"
+        ]
+      }
+    },
+    "isAvailableWorldwide": false,
+    "testingInstructions": "Say, Alexa, open Globie Earth. Then try, ask Globie Earth about trees that fix paddy soil, or, ask Globie Earth what the site is like. Answers are spoken plain text, so no Echo Show is required. To hear a soundscape, ask Globie Earth to generate a dawn chorus for the wetland and say yes when it asks you to confirm, wait for it to say the track is ready, then say, play my soundscape; use pause, resume and stop to control playback. Renders are asynchronous, so allow a moment between generating and playing. Answers are routed live, so a slow first response means the router is reaching a model and then the site's own data services.",
+    "category": "EDUCATION_AND_REFERENCE",
+    "distributionCountries": [
+      "US"
+    ]
+  },
+  "apis": {
+    "custom": {
+      "endpoint": {
+        "uri": "https://mcp.globie.earth/alexa",
+        "sslCertificateType": "Trusted"
+      },
+      "interfaces": [
+        "AUDIO_PLAYER"
+      ]
+    }
+  },
+  "privacyAndCompliance": {
+    "locales": {
+      "en-US": {
+        "privacyPolicyUrl": "https://globie.earth/privacy-policy.html",
+        "termsOfUseUrl": "https://globie.earth/terms-policy.html"
+      }
+    },
+    "allowsPurchases": false,
+    "usesPersonalInfo": true,
+    "isChildDirected": false,
+    "isExportCompliant": true,
+    "containsAds": false
+  }
+}

@@ -3,7 +3,7 @@
 A self-hosted **[Model Context Protocol](https://modelcontextprotocol.io) server**
 that puts Globie Earth's reforestation backend — and the Openmind.Travel travel
 catalogue — in reach of an Alexa+ (or any MCP) host: the living catalogue of
-native species, sites and guardian lore, the adoption records, the sanctuary's
+native species, sites and guardian lore, the adoption records, the site's
 conditions, a self-hosted voice loop to ask about all of it, and a full travel
 surface to search tours, flights, destinations and guides.
 
@@ -66,7 +66,7 @@ curl -s https://mcp.globie.earth/mcp \
 
 ### Tools (53)
 
-The surface is split into two groups: 17 **Globie Earth** tools (the sanctuary
+The surface is split into two groups: 17 **Globie Earth** tools (the site's
 catalogue, deeds, soundscapes, and podcasts) and 36 **Openmind.Travel** tools
 (`om_*` prefix) covering tours, flights, destinations, guides, community, trip
 planning and impact. Four Globie tools change state (`adopt_species`,
@@ -87,7 +87,7 @@ read-only.
 | `adopt_species` | Record an adoption (mutating; idempotent with a store transaction id) |
 | `get_my_deeds` | The Living Deeds issued for this caller's adoptions |
 | `get_eco_balance` | This caller's eco-token balance |
-| `generate_soundscape` | Queue a generated piece of music for the sanctuary (mutating) |
+| `generate_soundscape` | Queue a generated piece of music for the site (mutating) |
 | `get_soundscape` | Check a queued soundscape and return its audio URL when ready |
 | `search_podcasts` | Search the podcast library for shows about the living world |
 | `get_trending_podcasts` | List trending shows, optionally by category |
@@ -133,13 +133,14 @@ security.
 `forest-guide` — the persona and tool-selection guidance for a voice companion;
 `adopt-a-tree` — the guided adoption flow.
 
-### Browser side-routes
+### Side-routes
 
-Beside the MCP surface, for the app and the demo client:
+Beside the MCP surface, for the app, the demo client and the Alexa Skill:
 
 | Route | Purpose |
 | --- | --- |
 | `POST /route` | Turn one natural-language utterance into one tool call |
+| `POST /alexa` | Alexa Skill (ASK) webhook — spoken answers over the same 53 tools |
 | `GET /wiki` | The Wikipedia lead `describe_species` answers with, as plain HTTP |
 | `POST /voice/transcribe` / `POST /voice/speak` | The self-hosted STT/TTS voice loop |
 | `POST /contribute` / `DELETE /contribute/:id` | Offer a species photograph for review |
@@ -147,6 +148,14 @@ Beside the MCP surface, for the app and the demo client:
 | `GET /health` | Protocol version, embedding provider, and what is configured |
 
 Each is documented in [`infra/mcp/README.md`](infra/mcp/README.md).
+
+**An Alexa Skill is a second front door, not a second server.** Alexa+ add-ons
+hand our tools to Alexa+'s planner; a Skill is the older product, where the
+developer declares intents and Amazon sends back a matched one. `POST /alexa`
+carries one catch-all intent into the same router `POST /route` uses and runs the
+chosen tool against the same MCP surface in-process, so the two pipelines cannot
+disagree about what this server can do. The interaction model and manifest live
+in [`infra/mcp/skill-package/`](infra/mcp/skill-package).
 
 ---
 
@@ -163,6 +172,7 @@ bypass RLS; calling the API is how that is avoided.
    Alexa+ / MCP host │  POST https://mcp.globie.earth│
    browser client ──►│  /mcp  (Streamable HTTP)      │
                      └──────────────┬───────────────┘
+   Alexa Skill ─────► POST /alexa ──┘  (same router, same tools, in-process)
                                     │  X-Device-Id / Bearer, forwarded
               ┌─────────────────────┼─────────────────────┬───────────────────┐
               ▼                     ▼                     ▼                   ▼

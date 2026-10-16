@@ -15,7 +15,7 @@
 
   The panel is a locator plate, not a map: tiles cannot be fetched from a
   sandboxed view that may make no network request at all, and drawing a
-  coastline from memory would be a lie. So the plate shows the sanctuary's own
+  coastline from memory would be a lie. So the plate shows the site's own
   coordinates as text, under a decorative locator, and every reading the tool
   actually returned sits beside it. The readings are Open-Meteo *modelled*
   fields, not a sensor in the wetland, and the note says so.
@@ -343,7 +343,7 @@
 
       <div class="plate" id="plate">
         <span class="locator" aria-hidden="true"></span>
-        <span class="sr-only">Sanctuary coordinates</span>
+        <span class="sr-only">Site coordinates</span>
         <span class="coords" id="coords">--</span>
       </div>
 
@@ -375,7 +375,7 @@
         // Shown until the tool has answered, and whenever it answered without a
         // source of its own.
         var PLACEHOLDER_NOTE =
-          'Modelled fields for the sanctuary coordinates — not an on-site sensor.';
+          'Modelled fields for the site coordinates — not an on-site sensor.';
 
         var view = null;
         var latest = null;
@@ -529,7 +529,7 @@
         // ---- The views -------------------------------------------------------
         var VIEWS = {
           get_sanctuary_conditions: function (payload) {
-            headingEl.textContent = 'Sanctuary conditions';
+            headingEl.textContent = 'Site conditions';
 
             var coords = coordinateText(payload.coordinate);
             coordsEl.textContent = coords || '--';
@@ -614,7 +614,7 @@
           coordsEl.textContent = '--';
           tempEl.textContent = '--';
           metricsEl.replaceChildren(
-            metric('Reading the sanctuary…', message || 'One moment.', ''),
+            metric('Reading the site…', message || 'One moment.', ''),
           );
           noteEl.hidden = false;
           noteEl.textContent = PLACEHOLDER_NOTE;
@@ -637,7 +637,7 @@
 
           switch (message.method) {
             case 'ui/notifications/tool-input':
-              showPlaceholder('Reading the sanctuary…');
+              showPlaceholder('Reading the site…');
               break;
             case 'ui/notifications/tool-result':
               render(extractPayload(message.params));

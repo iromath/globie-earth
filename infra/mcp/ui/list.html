@@ -361,6 +361,15 @@
           return count + ' ' + (count === 1 ? one : many);
         }
 
+        /** The host of an external URL, for a web result's right-hand meta. */
+        function host(url) {
+          try {
+            return new URL(url).hostname.replace(/^www\./, '');
+          } catch (error) {
+            return null;
+          }
+        }
+
         /** One row: a title, an optional snippet, an optional right-hand meta. */
         function row(item) {
           var li = el('li', 'result');
@@ -447,6 +456,27 @@
             draw(rows);
           },
 
+          search_web: function (payload) {
+            headingEl.textContent = 'From the open web';
+            var results = Array.isArray(payload.results) ? payload.results : [];
+            setText(
+              summaryEl,
+              (present(payload.answer) ? payload.answer + ' ' : '') +
+                (present(payload.query) ? '· web, for “' + payload.query + '”' : '· web'),
+            );
+            var rows = [];
+            for (var i = 0; i < results.length; i++) {
+              var result = results[i] || {};
+              rows.push({
+                badge: host(result.url),
+                title: result.title,
+                text: result.content,
+                meta: percent(result.score),
+              });
+            }
+            draw(rows);
+          },
+
           get_my_deeds: function (payload) {
             headingEl.textContent = 'My living deeds';
             var deeds = Array.isArray(payload.deeds) ? payload.deeds : [];
@@ -473,6 +503,7 @@
         // which view it is.
         function inferView(payload) {
           if (!payload || typeof payload !== 'object') return null;
+          if (Array.isArray(payload.results)) return 'search_web';
           if (Array.isArray(payload.deeds)) return 'get_my_deeds';
           if (Array.isArray(payload.recommendations)) return 'recommend_species';
           if (Array.isArray(payload.hits)) {
@@ -539,7 +570,7 @@
 
           switch (message.method) {
             case 'ui/notifications/tool-input':
-              showPlaceholder('Searching the sanctuary…');
+              showPlaceholder('Searching the site…');
               break;
             case 'ui/notifications/tool-result':
               render(extractPayload(message.params));

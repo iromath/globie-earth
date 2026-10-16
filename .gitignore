@@ -28,3 +28,14 @@ __pycache__/
 
 # Local-only hackathon working docs; not for the public repo.
 Dev-Docs/Amazon/
+# Third-party credential material, not for the public repo.
+Dev-Docs/RevenueCat-Service-Account.md
+
+# The podcast index is a ~400 MB downloaded feed dump (Podcast Index), not a
+# source file: it is rebuilt by infra/podcast's ingest script, so it stays local.
+infra/podcast/data/*.db
+
+# The long-form guided meditations (~217 MB) are Globie Earth's own published
+# assets, served from the site origin (globie.earth/voice/guides/) and linked by
+# the skill's live VOICE_BASE_URL. They are not this server's to carry.
+infra/mcp/assets/voice/guides/

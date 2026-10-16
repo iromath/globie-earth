@@ -1,4 +1,4 @@
-// The Local Culture tools: the sanctuary's own Thai cookbook, the food and
+// The Local Culture tools: the site's own Thai cookbook, the food and
 // foodways of the places it protects.
 //
 // api.cookbook_recipes (infra/schema/254_cookbook.sql) is a world-readable layer
@@ -229,7 +229,7 @@ export function registerCookbookTools(server: McpServer, caller: Caller): void {
     {
       title: 'Search local culture - the Thai cookbook',
       description:
-        'Search Globie Earth\'s Local Culture collection - the sanctuary\'s own Thai cookbook, ' +
+        'Search Globie Earth\'s Local Culture collection - the site\'s own Thai cookbook, ' +
         '"Cookbook Version Kai & Shea", the recipe book the project publishes about the food of ' +
         'the places it protects. Use this for any cooking or food-culture question: what a ' +
         'dish is, what goes into it, its ingredients, its region or category (dips, salads, ' +
@@ -327,7 +327,7 @@ export function registerCookbookTools(server: McpServer, caller: Caller): void {
         let ranking: 'reranked' | 'cosine' = 'cosine';
         let rerankModel: string | null = null;
         if (rerank.enabled && hits.length > 1) {
-          const outcome = await rerankHits(query, hits);
+          const outcome = await rerankHits(query, hits, caller.latencyBudgetMs);
           if (outcome) {
             ranked = outcome.order.map((index) => hits[index]);
             ranking = 'reranked';

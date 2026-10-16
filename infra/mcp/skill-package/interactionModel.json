@@ -1,0 +1,181 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "globie earth",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": [
+            "help",
+            "what can i ask"
+          ]
+        },
+        {
+          "name": "AMAZON.YesIntent",
+          "samples": [
+            "yes",
+            "yes go ahead",
+            "go ahead",
+            "yes please"
+          ]
+        },
+        {
+          "name": "AMAZON.NoIntent",
+          "samples": [
+            "no",
+            "no thanks",
+            "no thank you",
+            "not now"
+          ]
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "PlaySoundscapeIntent",
+          "samples": [
+            "play my soundscape",
+            "play the soundscape",
+            "play my music",
+            "play the music",
+            "play it",
+            "play my track",
+            "hear my soundscape",
+            "hear my music",
+            "start my soundscape",
+            "start the music"
+          ]
+        },
+        {
+          "name": "PlayPodcastIntent",
+          "samples": [
+            "play a podcast",
+            "play the podcast",
+            "play a show",
+            "play an episode",
+            "play a podcast episode",
+            "listen to a podcast",
+            "listen to a show",
+            "start a podcast",
+            "play the forest podcast"
+          ]
+        },
+        {
+          "name": "PlayMeditationIntent",
+          "slots": [
+            {
+              "name": "duration",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "play a guided meditation",
+            "play a meditation",
+            "play the meditation",
+            "guide me through a meditation",
+            "guide me in meditation",
+            "start a guided meditation",
+            "start a mindfulness session",
+            "play a mindfulness session",
+            "help me meditate",
+            "play a {duration} minute meditation",
+            "play a {duration} minute guided meditation",
+            "start a {duration} minute meditation",
+            "start a {duration} minute guided meditation",
+            "start a {duration} minute mindfulness session",
+            "play a {duration} minute mindfulness session",
+            "play a meditation for {duration} minutes",
+            "play a guided meditation for {duration} minutes",
+            "play a mindfulness session for {duration} minutes",
+            "guide me through a {duration} minute meditation",
+            "meditate for {duration} minutes"
+          ]
+        },
+        {
+          "name": "PlayPublicTrackIntent",
+          "samples": [
+            "play public music",
+            "play public sound",
+            "play shared music",
+            "play shared sound",
+            "play a public track",
+            "play something from the public library",
+            "play music from the public library",
+            "play something public"
+          ]
+        },
+        {
+          "name": "DisableWebOfferIntent",
+          "samples": [
+            "stop offering web search",
+            "stop offering the web",
+            "don't offer web search",
+            "do not offer web search",
+            "no more web search offers",
+            "stop asking about the web",
+            "stop asking me about the web",
+            "turn off web search",
+            "stop searching the web"
+          ]
+        },
+        {
+          "name": "EnableWebOfferIntent",
+          "samples": [
+            "offer web search again",
+            "turn web search back on",
+            "turn web search offers back on",
+            "you can offer web search again",
+            "you can search the web again",
+            "start offering web search again"
+          ]
+        },
+        {
+          "name": "AskGlobieIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "about {query}",
+            "what {query}",
+            "what is {query}",
+            "how {query}",
+            "how do i {query}",
+            "to find {query}",
+            "to {query}",
+            "find {query}",
+            "search for {query}",
+            "show me {query}",
+            "tell me about {query}",
+            "give me {query}",
+            "check {query}",
+            "i want to {query}",
+            "help me {query}",
+            "can you {query}",
+            "explore {query}"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}

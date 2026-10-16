@@ -118,6 +118,39 @@ export function insert<T>(table: string, row: Record<string, unknown>, caller: C
   });
 }
 
+/** The devices this process has already registered, so the check runs once each. */
+const registeredDevices = new Set<string>();
+
+/**
+ * Makes sure the caller's device exists in api.devices.
+ *
+ * The studio refuses a device it has never seen - its requireDevice answers 401
+ * "That device has not been registered by this app." - and it is right to: the
+ * web clients register themselves on first launch. A voice caller never does,
+ * because its device id is derived from the Amazon userId rather than created
+ * by an app (see deviceIdFor in alexa.ts), so the studio has no row for it and
+ * every soundscape call fails. Registering here is the same lazy insert the
+ * app's own RPCs already do (infra/schema/090_starting_grant.sql), and the RLS
+ * insert policy accepts it for exactly one reason: the row's id is the caller's
+ * own X-Device-Id (infra/schema/030_rls.sql).
+ *
+ * A device that is already registered answers with a unique-violation (`23505`
+ * on the wire, 409 to a client), which is the goal rather than a failure, so it
+ * is swallowed. Anything else - a refused insert, an unreachable API - is a real
+ * error and is raised.
+ */
+export async function ensureDevice(caller: Caller): Promise<void> {
+  if (registeredDevices.has(caller.deviceId)) return;
+  try {
+    await insert('devices', { id: caller.deviceId }, caller);
+  } catch (error) {
+    const duplicate =
+      error instanceof PostgrestError && (error.code === '23505' || error.status === 409);
+    if (!duplicate) throw error;
+  }
+  registeredDevices.add(caller.deviceId);
+}
+
 /**
  * Updates the rows a PostgREST filter matches, and returns the rows it changed.
  *

@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes
 Globie Earth's reforestation backend — its living catalogue of native species,
-sites and guardian lore, its adoption records and its sanctuary conditions — as
+sites and guardian lore, its adoption records and its site conditions — as
 tools an Alexa+ (or any other MCP) host can call.
 
 This service is the **Alexa+ track submission**. It is self-hosted on the same
@@ -36,13 +36,13 @@ All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`
 | `search_local_culture` | Searches Globie Earth's Local Culture collection — its own Thai cookbook, "Cookbook Version Kai & Shea" — by dish, ingredient, region or category. Semantic when a provider is configured, keyword otherwise. | Same `catalog_search` RPC, restricted to `entity_type = 'recipe'`; keyword fallback reads `cookbook_recipes` |
 | `get_recipe` | One full recipe: English/romanised/Thai names, region, category, servings, total time, ingredients, numbered method with per-step times, and tips. Resolves by id, slug or dish name. | `cookbook_recipes` read (RLS-scoped, world-readable) |
 | `recommend_species` | Recommends species from the caller's own past adoptions. | `recommend_species` RPC |
-| `get_sanctuary_conditions` | Ambient CO₂, European AQI, humidity and air temperature at the sanctuary. | Open-Meteo (keyless, modelled fields) |
+| `get_sanctuary_conditions` | Ambient CO₂, European AQI, humidity and air temperature at the site. | Open-Meteo (keyless, modelled fields) |
 | `describe_photo` | Describes an attached photo — a plant, landscape, object, room or document. | DeepSeek `deepseek-v4-flash-vision-exp` or Amazon Bedrock Nova, chosen by `VISION_PROVIDER` (not the catalogue) |
-| `describe_species` | The English Wikipedia lead section for one species, by scientific or common name. | Wikipedia Action API (keyless, CC BY-SA 4.0, text only) |
+| `describe_species` | The English Wikipedia lead section for one species, by scientific or common name, plus the lead image when it is provably freely licensed. | Wikipedia Action API (keyless, CC BY-SA 4.0) |
 | `adopt_species` | Records an adoption (mutating). Idempotent when a store transaction id is supplied. | `create_adoption` + `award_eco_tokens` RPCs |
 | `get_my_deeds` | The Living Deeds issued for this caller's adoptions, newest first. | `living_deeds` read (RLS-scoped) |
 | `get_eco_balance` | This caller's eco-token balance. | `eco_token_balance` read (RLS-scoped) |
-| `generate_soundscape` | Queues a generated piece of music for the sanctuary (mutating). | Studio proxy `POST /v1/studio/tracks` |
+| `generate_soundscape` | Queues a generated piece of music for the site (mutating). | Studio proxy `POST /v1/studio/tracks` |
 | `get_soundscape` | Checks a queued soundscape by its track id, and returns the audio URL once the render is ready. | Studio proxy `GET /v1/studio/tracks/:id` |
 | `search_podcasts` | Searches the podcast library for shows about the living world. | Podcast proxy `GET /v1/podcast/search` |
 | `get_trending_podcasts` | Lists shows trending in the podcast library, optionally by category. | Podcast proxy `GET /v1/podcast/trending` |
@@ -55,20 +55,29 @@ All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`
 resolves to the original deed and reports `replayed: true` instead of issuing a
 second one. The tool records the adoption; it does not itself take payment.
 
-`describe_photo` is the one tool that reads an image rather than the sanctuary's
+`describe_photo` is the one tool that reads an image rather than the site's
 own data: it hands the attached photo to the vision model and returns the model's
 description, so a photo of *anything* — a tree or not — has a tool to match. Its
 payload names the model and says the description is the model's reading of the
-image, not a catalogue fact, so a host never presents it as Globie Earth data.
+image, not a catalogue fact, so a host never presents it as Globie Earth data. It
+takes the photo either as a `data:` URL (what the browser host sends, downscaled)
+or as an `http(s)` URL, which the server **fetches and inlines itself** — see
+*Images* under the tool router for why that step exists and what guards it.
 
 `describe_species` is the one tool that reads text from outside the stack: it
 fetches the English Wikipedia lead section for a species by name and returns it
 verbatim. That text is **external reference under CC BY-SA 4.0**, not Globie
 data, so the payload carries the article URL and a `source` line, and the tool's
 spoken form names Wikipedia and says the text may be incomplete or unverified. It
-pulls **text only** — never Wikipedia's lead image, which would collide with the
-app's strict photo-attribution model — and returns a clear "no article"
-explanation rather than an empty record when the name matches nothing.
+also carries the article's **lead image**, but only when that image is *provably*
+freely licensed: the payload then includes the image's own licence, its licence
+deed and the Wikimedia file page it must be credited to, and it is `null` when no
+free image exists. The tool reports that metadata and Wikimedia's thumbnail URL
+without downloading anything — a spoken turn has no use for the bytes — while
+`GET /wiki` below passes `hostImage: true` and copies the thumbnail into object
+storage, so the app's species page serves it from our own origin. A name that
+matches nothing returns a clear "no article" explanation rather than an empty
+record.
 
 The Local Culture tools, `search_local_culture` and `get_recipe`, read the
 project's **own** cookbook, "Cookbook Version Kai & Shea" (Openmind Projects),
@@ -95,9 +104,13 @@ the Gemini and Podcast Index credentials; this server holds neither.
 `get_podcasts_by_theme` reads the shelf's curated listening themes — the same
 list the app's Listen chips draw from, served by the proxy on
 `/v1/podcast/themes`. A theme is a full-text topic, not a mirror category: the
-index carries no `meditation` or `sustainability` token, so each theme resolves
-as a search over the same local index browse and search use. Called with no
+mirror's category chips ("Society & Culture" and the like) name nothing a
+listener would ask for, so each theme resolves as a search over the same local
+index browse and search use, one `AND` per word of the label. Called with no
 theme it returns the list; called with one it returns the shows matching it.
+Every theme in the list is measured against the mirror before it ships, so each
+one returns shows today — `Forest` alone answers 202 of them, each carrying
+cover art, an episode count and a description.
 
 ### Openmind Travel tools (`om_*`)
 
@@ -121,6 +134,18 @@ directly; no caller identity or auth is needed for reads.
 The impact data (causes, treasures, stories) is served from static data baked
 into the server (`src/openmind/impactData.ts`); `om_get_impact_travel_options`
 is the one impact tool that hits the live tours/projects API.
+
+Two of the destination-browsing endpoints are empty upstream, and the tools
+report that rather than hiding it. `om_search_destinations` and
+`om_list_categories` both answer an empty list, because the catalogue behind them
+(`GET /api/destinations/search` and `GET /api/categories` on `bokunapi.9o9.io`)
+returns `200 []` for every input — verified 2026-10-16 against queries as varied
+as `Bangkok`, `Japan` and `a`. Their siblings on the same host answer normally
+(`/api/countries`, `/api/popular-destinations` and `/api/autocomplete/cities` all
+return rows), so this is the upstream catalogue's own gap and not a mapping error
+here. The two tools say "No destinations found." and "No categories available."
+in the spoken line; nothing is substituted from another endpoint to paper over
+it.
 
 The browser MCP client (`infra/mcp-client/`) renders all 53 tools from
 `tools/list` with no hard-coded list. Three trip-planning tools
@@ -160,11 +185,11 @@ They still appear in `resources/templates/list` and still resolve on
 
 | Prompt | What it is |
 | --- | --- |
-| `forest-guide` | The persona and tool-selection guidance for a voice companion to the sanctuary. |
+| `forest-guide` | The persona and tool-selection guidance for a voice companion to the site. |
 | `adopt-a-tree` | The guided adoption flow: choose, confirm, then read back the Living Deed. |
 
 `get_sanctuary_conditions` returns Open-Meteo **modelled** fields for the
-sanctuary's coordinates, not readings from a sensor on site. The tool
+site's coordinates, not readings from a sensor on site. The tool
 description says so, the payload says so, and the server's `instructions` tell
 the model to say so too — because "if we can't prove something happened, the app
 doesn't claim it did".
@@ -222,6 +247,18 @@ JPEG first, so it stays well under the cap and under the request body limit. An
 image sent with a text-only model is refused (`400`) rather than silently ignored
 — the text model would otherwise drop the photo without a word.
 
+An `http(s)` URL is **fetched by this server and inlined as a data URL** before
+the call is issued, because the OpenAI-compatible endpoint is handed the URL and
+expected to download it itself and does not — it answers
+`400 … Failed to download image from …`. The fetch is guarded: the image argument
+is already narrowed to a `data:image/…;base64,…` or `http(s)` URL at each call
+site (`isImageInput`), and the fetch itself shares the call's abort signal so it
+cannot outlive the timeout, refuses anything whose content type is not `image/*`,
+and enforces a byte ceiling that matches the character cap above. A URL that
+404s, serves `text/html` or is too large comes back as a plain explanation rather
+than a model error. Nova needs no such step: the Converse API takes image
+*bytes*, so `src/llm.ts` already fetched there.
+
 A photo is not just context for the routing decision. The router picks
 `describe_photo` — the one tool that can read an image — and the host fills the
 attached photo into that call's `image` argument itself, because the router
@@ -234,6 +271,116 @@ The route holds the credential and the page holds none: the browser sends a mode
 (`"model"`), so the client can say which one did, and `GET /health` lists the
 allowlist under `models`.
 
+## Alexa Skill — `POST /alexa`
+
+A **Skill** is a different Amazon product from the Alexa+ add-on this server was
+built for, and a different submission pipeline. An add-on hands our tools to
+Alexa+'s own planner and needs no interaction model at all; a Skill is the older
+product, where the developer declares the intents and Alexa sends back a matched
+one. The Skills console is live for this account even while the Alexa+ add-on
+console still reads "Coming Soon", so this route is the bridge that lets the same
+tools answer on either.
+
+It is deliberately the thinnest adapter that could work — it adds no tool, no
+model and no data of its own:
+
+| The route… | …is the existing code |
+| --- | --- |
+| builds the MCP surface | `buildServer(caller)` (`src/mcp-server.ts`), in-process over `InMemoryTransport` — no HTTP hop, and no second implementation of the tools |
+| picks a tool | `routeToTool(...)` (`src/router.ts`), the same router `POST /route` uses: same allowlist, same provider billing, same refusals |
+| runs it | `client.callTool(...)` on that in-process surface |
+| speaks the answer | `src/alexa.ts`, which drops markdown, links and data URLs and cuts at a sentence boundary, because tool payloads are written for a screen |
+
+```
+POST /alexa           no X-Device-Id — this is Amazon's envelope, not ours
+{
+  "version": "1.0",
+  "session": { "application": { "applicationId": "amzn1.ask.skill.…" },
+               "user": { "userId": "amzn1.ask.account.…", "accessToken": "…" } },
+  "request": { "type": "IntentRequest",
+               "timestamp": "2026-10-16T00:00:00Z",
+               "intent": { "name": "AskGlobieIntent",
+                           "slots": { "query": { "value": "trees that fix paddy soil" } } } }
+}
+→ { "version": "1.0",
+    "response": { "outputSpeech": { "type": "PlainText", "text": "…" },
+                  "reprompt": { "outputSpeech": { "type": "PlainText", "text": "…" } },
+                  "shouldEndSession": false } }
+```
+
+**One catch-all intent.** `AskGlobieIntent` carries a single `AMAZON.SearchQuery`
+slot named `query`, and every sample in the interaction model funnels into it —
+`about {query}`, `what {query}`, `find {query}`, `to {query}` … — so Alexa's only
+job is to hand over the words and the router's job is to decide what they mean.
+The samples are *carrier phrases*, not a list of supported questions: the phrases
+in `skill-package/interactionModel.json` cover the three the help prompt
+advertises (`about`, `what`, `to find`), and any phrasing that opens with one of
+them reaches the same router a typed question would.
+
+**What a Skill cannot do, and what this does about it.** `AMAZON.FallbackIntent`
+is delivered with **no utterance at all**: when the model fails to match, there
+is nothing left to route. There is no honest way to answer, so the Skill asks the
+listener to rephrase. That is why the interaction model carries explicit carrier
+phrases rather than relying on a bare catch-all — a Skill whose only sample was
+`{query}` would have nothing to match on, and worse, an `AMAZON.SearchQuery` slot
+is only legal *with* a carrier phrase in the same sample. `AMAZON.StopIntent`,
+`AMAZON.CancelIntent` and `AMAZON.HelpIntent` are answered from fixed copy.
+
+**Identity.** An ASK request carries no `X-Device-Id`, so the caller is resolved
+in two steps (`callerFor` in `src/alexa.ts`): an account-linking `accessToken`
+when the listener has linked one — the same OAuth 2.1 token `src/oauth.ts` issues,
+accepted by `resolveCaller` unchanged — and otherwise a device id derived
+deterministically from Amazon's `userId` (`sha256('globie-alexa:' + userId)`,
+shaped like a v5 UUID). Deriving rather than generating one matters: the
+device-scoped RPCs mean a random id per request would leave a listener unable to
+hear their own deeds read back, and nowhere for an adoption to land. Derived, the
+same listener keeps the same site across sessions.
+
+**Signatures.** `/alexa` proves Amazon sent the request before it spends
+anything: the `SignatureCertChainUrl` and `Signature` headers, the chain's issuer
+name and validity window, an RSA-SHA256 check over the *raw* body bytes, a
+150-second clock window and the `applicationId`. See `src/alexa-verify.ts`. The
+raw bytes are why `src/server.ts` replaces Fastify's JSON parser with the same
+parser plus one addition — it keeps the buffer on the request as `rawBody` —
+because re-serialising the parsed object would change key order and whitespace,
+which is exactly what the signature covers.
+
+Verification is **on** unless `ALEXA_VERIFY_SIGNATURE=false`, which is for local
+development only: with it off, anyone who can reach the port can spend this
+server's model key through `/alexa`, and every unverified request is logged as a
+warning. `ALEXA_SKILL_ID` names the skill whose `applicationId` is accepted;
+while it is unset the id check cannot run, which `GET /health` reports.
+
+### Try it without Amazon
+
+```bash
+npm run simulate:skill                                      # local server
+ALEXA_URL=https://mcp.globie.earth/alexa node scripts/simulate-alexa-skill.mjs
+```
+
+The script posts real ASK envelopes and prints the spoken reply, so the whole
+voice path — envelope, router, tool, speech — can be checked before anything is
+registered. It is two-mode, because `/alexa` is: against a server with
+verification on it asserts the unsigned request is refused with `401`, which is
+the proof the door is shut and the only check possible from outside Amazon; with
+`ALEXA_VERIFY_SIGNATURE=false` it walks `LaunchRequest`, the catch-all intent with
+a real query, `HelpIntent`, `FallbackIntent` and `StopIntent`, asserting each
+returns speech. Run against production while the deployed image predates this
+route, it reports the `404`.
+
+### Registering it
+
+Two files, both under `skill-package/`, both pasted into the developer console:
+
+| File | Where it goes |
+| --- | --- |
+| `interactionModel.json` | the console's interaction-model **JSON editor** (or `ask deploy`) |
+| `skill.json` | the skill **manifest**, whose `apis.custom.endpoint.uri` is `https://mcp.globie.earth/alexa` |
+
+The endpoint must be HTTPS with a trusted certificate — it is, it is the same
+host as `/mcp`. Nothing about the Alexa+ add-on path changes: the two live side
+by side on one server and one tool surface.
+
 ## Wikipedia lookup — `GET /wiki`
 
 The same Wikipedia lead `describe_species` answers with, as a plain HTTP read,
@@ -245,15 +392,27 @@ Wikipedia is unreachable — simply leaves the section out.
 GET /wiki?name=Dipterocarpus%20alatus   X-Device-Id (or demo bearer) required — the same identity /mcp takes
 → { "title": "Dipterocarpus alatus", "extract": "…",
     "url": "https://en.wikipedia.org/wiki/Dipterocarpus_alatus",
-    "license": "Wikipedia · CC BY-SA 4.0" }
+    "license": "Wikipedia · CC BY-SA 4.0",
+    "image": { "url": "…", "license": "CC BY-SA 4.0", "licenseUrl": "…",
+               "credit": "…", "descriptionUrl": "…" } }   // null when the article has no free image
 → 404 when Wikipedia has no article for that name
 ```
 
 Attribution is not optional: a caller that renders the text must name Wikipedia
-and link to `url`, because the text is CC BY-SA 4.0. No lead image is returned —
-only the plain-text lead. Implemented once in `src/wiki.ts`, and shared by this
-route, the `describe_species` tool, and the `wikipedia` field on the
-species-bearing resources.
+and link to `url`, because the text is CC BY-SA 4.0. An `image` is returned only
+when its licence is *provably* free, and it arrives with everything the credit
+requires — its own licence, the licence deed, the rights holder and the Wikimedia
+file page — so a caller that shows the picture can show the credit that goes with
+it. This route is the one caller that asks for the bytes: it passes
+`hostImage: true`, and `src/wiki.ts` copies Wikimedia's thumbnail into object
+storage rather than hot-linking their CDN. That copy is best-effort, exactly like
+every other optional dependency here — an unconfigured `MINIO_*`, a failed upload
+or an image above 6 MB leaves `url` pointing at Wikimedia's own thumbnail instead
+of dropping the picture, and `image` is `null` only when the article has no free
+lead image. The text always stands alone. Implemented once in `src/wiki.ts`, and
+shared by this route, the `describe_species` tool (which reports the same
+metadata without downloading), and the `wikipedia` field on the species-bearing
+resources.
 
 ## Voice cascade — `POST /voice/transcribe` and `POST /voice/speak`
 
@@ -503,7 +662,7 @@ These are the names the process reads. In `infra/.env` the four origins carry th
 | --- | --- | --- |
 | `POSTGREST_URL` | **yes** | API origin, e.g. `https://api.globie.earth`. The container refuses to start without it. Locally, compose defaults it to `http://rest:3000`. |
 | `STUDIO_URL` | no | Origin of the studio proxy, for the soundscape tools. Unset only disables those tools, which then explain themselves. Locally, compose defaults it to `http://studio:8080`. |
-| `PODCAST_URL` | no | Origin of the podcast proxy, for the two podcast tools. Unset only disables those tools, which then explain themselves. Locally, compose defaults it to `http://podcast:8080`. |
+| `PODCAST_URL` | no | Origin of the podcast proxy, for the five podcast tools. Unset only disables those tools, which then explain themselves. Locally, compose defaults it to `http://podcast:8080`. |
 | `OPENMIND_API_URL` | no | Origin of the Openmind.Travel REST catalogue, for the 36 `om_*` travel tools. Defaults to `https://bokunapi.9o9.io`. Unset leaves the tools working at the default. |
 | `PORT` | no | Listen port. Defaults to `8080`, which is what the image exposes. |
 | `MCP_BEARER_TOKEN` | no | The demo static bearer. Unset disables the demo path. |
@@ -539,6 +698,8 @@ These are the names the process reads. In `infra/.env` the four origins carry th
 | `SPEECH_STT_MODEL` | no | Speech-to-text model id. Defaults to the multilingual `Systran/faster-whisper-base`. |
 | `SPEECH_TTS_MODEL` | no | Text-to-speech model id. Defaults to `speaches-ai/Kokoro-82M-v1.0-ONNX`. |
 | `SPEECH_TTS_VOICE` | no | The Kokoro voice `/voice/speak` speaks with by default. The client may pick any id `/health` advertises under `speech.voices` instead. Defaults to `af_heart`. |
+| `ALEXA_SKILL_ID` | no | The skill id (`amzn1.ask.skill.…`) whose `applicationId` `/alexa` accepts. Unset skips that check only; `GET /health` reports it under `alexa.skillId`. |
+| `ALEXA_VERIFY_SIGNATURE` | no | `true` (default) verifies Amazon's request signature on `/alexa`. Set `false` for local development only — it leaves `/alexa` an open path to this server's model key. |
 
 The two media/speech feature groups fail closed and in isolation: an unset
 `MINIO_*` group disables only `/contribute`, and an unset `SPEECH_URL` disables

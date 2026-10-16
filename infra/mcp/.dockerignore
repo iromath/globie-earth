@@ -2,3 +2,6 @@ node_modules
 dist
 .cache
 .env
+# Guided meditations are no longer baked in (they are served from the site
+# origin, see Dockerfile), so keep the ~217 MB out of the build context too.
+assets

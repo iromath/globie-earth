@@ -57,6 +57,9 @@ COPY --from=build /app/dist ./dist
 # card, list, carousel and map. They are plain HTML with no build step, so they
 # come straight from the build context.
 COPY ui ./ui
+# The long-form guided meditations (voice/guides/*.mp3) are not baked in: they
+# are Globie Earth's own published assets, served from the site origin, and the
+# skill hands the AudioPlayer an absolute URL there (VOICE_BASE_URL).
 # Owned by node so the cache stays writable without running the server as root.
 COPY --chown=node:node --from=build /app/.cache ./.cache
 

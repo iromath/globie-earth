@@ -270,9 +270,73 @@ function openAiContent(parts: LlmPart[]): unknown {
   );
 }
 
+/**
+ * The largest photo this server will fetch and inline, in raw bytes.
+ *
+ * MAX_IMAGE_CHARS bounds the base64 the host sends, and base64 is four thirds
+ * of the bytes it encodes, so this is that same ceiling in bytes.
+ */
+const MAX_FETCH_BYTES = Math.floor(MAX_IMAGE_CHARS / 4) * 3;
+
+/**
+ * Rewrites an http(s) image part as a data URL, by fetching it here.
+ *
+ * The OpenAI-compatible endpoint is handed the URL and expected to download it
+ * itself, and against the live DeepSeek endpoint it does not: it answers 400
+ * "Failed to download image from …". So the server fetches the photo and inlines
+ * the bytes, which is the one form both providers accept. The URL is arbitrary
+ * input, so it is guarded - it shares the call's abort signal, and only an
+ * image response inside the size ceiling is inlined.
+ */
+async function inlineImage(url: string, signal: AbortSignal): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(url, { signal, redirect: 'follow' });
+  } catch {
+    throw new LlmError(signal.aborted ? 'timeout' : 'unreachable');
+  }
+  if (!response.ok) {
+    throw new LlmError('upstream', response.status, 'The photo URL could not be read');
+  }
+
+  const contentType = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  if (!contentType.startsWith('image/')) {
+    throw new LlmError(
+      'upstream',
+      response.status,
+      `The photo URL served ${contentType || 'no content type'}, not an image`,
+    );
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.byteLength > MAX_FETCH_BYTES) {
+    throw new LlmError(
+      'upstream',
+      response.status,
+      `The photo URL is larger than the ${MAX_FETCH_BYTES} byte limit`,
+    );
+  }
+  return `data:${contentType};base64,${bytes.toString('base64')}`;
+}
+
+/** The parts with every http(s) image fetched and inlined as a data URL. */
+async function inlinedParts(parts: LlmPart[], signal: AbortSignal): Promise<LlmPart[]> {
+  return Promise.all(
+    parts.map(async (part) =>
+      part.type === 'image' && !dataUrlMime(part.url)
+        ? { type: 'image' as const, url: await inlineImage(part.url, signal) }
+        : part,
+    ),
+  );
+}
+
 async function deepseekChat(model: string, request: LlmRequest, signal: AbortSignal): Promise<LlmResult> {
   const { baseUrl, apiKey } = deepseekConfig();
   if (!apiKey) throw new LlmError('unconfigured');
+
+  // An http(s) photo is fetched here rather than handed to the endpoint, which
+  // cannot download it (see inlineImage). Text-only requests pay nothing for it.
+  const parts = await inlinedParts(request.parts, signal);
 
   let upstream: Response;
   try {
@@ -283,7 +347,7 @@ async function deepseekChat(model: string, request: LlmRequest, signal: AbortSig
         model,
         messages: [
           { role: 'system', content: request.system },
-          { role: 'user', content: openAiContent(request.parts) },
+          { role: 'user', content: openAiContent(parts) },
         ],
         temperature: request.temperature ?? 0,
         ...(request.tools?.length

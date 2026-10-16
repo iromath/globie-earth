@@ -20,7 +20,7 @@
 // forwarded, and the keys stay here: the page still holds no credential, only a
 // model name.
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 import { deepseekConfig } from './deepseek.js';
 import { resolveCaller } from './identity.js';
@@ -40,17 +40,47 @@ import {
 } from './llm.js';
 
 /** One tool as tools/list advertises it, trimmed to what the router needs. */
-interface AdvertisedTool {
+export interface AdvertisedTool {
   name: string;
   description?: string;
   inputSchema?: unknown;
 }
 
 /** The host's answer: the tool to call, its arguments, and why. */
-interface RouteDecision {
+export interface RouteDecision {
   tool: string | null;
   arguments: Record<string, unknown>;
   rationale: string;
+}
+
+/**
+ * What the router decided, or why it could not. A refusal carries the HTTP
+ * status its own front door would have used, so neither front door has to
+ * invent one - and so a second door cannot quietly widen what is allowed.
+ */
+export type RouteOutcome =
+  | { ok: true; decision: RouteDecision; model: string }
+  | { ok: false; status: number; error: string };
+
+/** One routing request: the listener's words and the tools they may reach. */
+export interface RouteInput {
+  utterance: string;
+  tools: AdvertisedTool[];
+  /** A model id from ROUTER_MODELS. Omitted means the configured default. */
+  model?: string;
+  /** A data: or http(s) image URL, for the vision model only. */
+  image?: string;
+  /**
+   * Whether the listener has already agreed to this request.
+   *
+   * The state-changing tools say to ask first (tools/studio.ts), so the router
+   * answers the opening request with a question rather than a tool call. A voice
+   * turn cannot carry that question to the next utterance - the Skill webhook
+   * keeps no session of its own (alexa.ts) - so the confirmation is held in the
+   * Skill's session attributes and the same sentence is routed a second time
+   * with this set, which is what turns the question into the call.
+   */
+  confirmed?: boolean;
 }
 
 /** How long the upstream model may take before the route gives up. */
@@ -73,7 +103,7 @@ export function routerHealth(): { configured: boolean; model: string; models: Ro
 
 const SYSTEM_PROMPT_BASE = [
   "You route a listener's request to exactly one tool on the Globie Earth MCP server.",
-  'Globie Earth is a reforestation sanctuary in Isaan, Thailand, and also offers a travel ' +
+  'Globie Earth is a regenerative agroforestry site in Isaan, Thailand, and also offers a travel ' +
     'catalogue (the om_* tools: tours, destinations, flights, guides, trip planning).',
   'Call exactly one tool, using its exact name, and fill its arguments from the request.',
   "When the request is a free-text question, pass the question through as the tool's query argument.",
@@ -113,7 +143,7 @@ const PHOTO_ATTACHED = [
 ];
 
 // Stated only when no image is attached. The clause above used to be part of the
-// fixed prompt, so a plain text request ("how is the sanctuary doing?") was told
+// fixed prompt, so a plain text request ("how is the site doing?") was told
 // a photo *was* attached and got routed to describe_photo, which then had no
 // image to read. Telling the model the truth - no photo here - keeps it off that
 // tool and leaves the decision to the words alone.
@@ -125,9 +155,22 @@ const NO_PHOTO = [
 const NO_TOOL_CLAUSE =
   'If no offered tool can serve the request, answer without calling a tool and say why in one sentence.';
 
+// Stated only on a re-route the listener has already agreed to (RouteInput.
+// confirmed). Without it the state-changing tools' "ask before calling it" reads
+// the same sentence as a fresh request and asks the same question a second time,
+// which is exactly the loop this exists to break.
+const CONFIRMED_CLAUSE =
+  'The listener has already given their go-ahead for this request in the previous turn, so ' +
+  'call the tool now instead of asking for confirmation again.';
+
 /** The router prompt for this request, with the photo clause stated only when one is attached. */
-function systemPrompt(hasImage: boolean): string {
-  return [...SYSTEM_PROMPT_BASE, ...(hasImage ? PHOTO_ATTACHED : NO_PHOTO), NO_TOOL_CLAUSE].join(' ');
+function systemPrompt(hasImage: boolean, confirmed: boolean): string {
+  return [
+    ...SYSTEM_PROMPT_BASE,
+    ...(hasImage ? PHOTO_ATTACHED : NO_PHOTO),
+    ...(confirmed ? [CONFIRMED_CLAUSE] : []),
+    NO_TOOL_CLAUSE,
+  ].join(' ');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,6 +185,127 @@ function asLlmTools(tools: AdvertisedTool[]): LlmTool[] {
     // A tool with no schema is still routable; an empty object schema is valid.
     parameters: isRecord(tool.inputSchema) ? tool.inputSchema : { type: 'object', properties: {} },
   }));
+}
+
+/**
+ * Routes one utterance to one tool call.
+ *
+ * Lifted out of the /route handler so a second front door can use it: the Alexa
+ * Skill adapter (alexa.ts) is handed exactly the same thing - a listener's
+ * sentence and the tool list - and has no reason to reach this over HTTP. Every
+ * decision that costs money, and every refusal, stays here either way, so the
+ * two doors cannot drift apart on what is allowed or which model is billed.
+ */
+export async function routeToTool(input: RouteInput, log: FastifyBaseLogger): Promise<RouteOutcome> {
+  const tools = input.tools;
+  if (!tools.length || !tools.every((tool) => isRecord(tool) && typeof tool.name === 'string' && tool.name)) {
+    return { ok: false, status: 400, error: 'The router body must list at least one tool with a name.' };
+  }
+
+  // A caller may name a model, but only one this router offers. An unknown
+  // name is refused rather than forwarded, so the allowlist cannot be walked
+  // past to bill some other model to this server's key. Each offered id
+  // carries the provider that serves it, so this one choice also picks
+  // whether the call goes to DeepSeek or to Amazon Bedrock Nova.
+  const { model: defaultModel } = deepseekConfig();
+  const requestedModel = input.model?.trim() ?? '';
+  const spec = requestedModel ? modelSpec(requestedModel) : modelSpec(defaultModel);
+  if (requestedModel && !spec) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `This router does not offer the model "${requestedModel}". It offers: ` +
+        `${ROUTER_MODELS.map((model) => model.id).join(', ')}.`,
+    };
+  }
+  const model = spec?.id ?? defaultModel;
+  // An unlisted default (DEEPSEEK_MODEL set to something off the list) still
+  // goes to DeepSeek, which is the provider that name belongs to.
+  const provider: LlmProvider = spec?.provider ?? 'deepseek';
+  if (!providerConfigured(provider)) {
+    return {
+      ok: false,
+      status: 503,
+      error:
+        provider === 'nova'
+          ? 'The tool router is not configured for Nova. Set the Bedrock credentials ' +
+            '(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS_BEARER_TOKEN_BEDROCK ' +
+            'API key, and BEDROCK_REGION or AWS_REGION) in the MCP server environment.'
+          : 'The tool router is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
+            'DEEPSEEK_BASE_URL / DEEPSEEK_MODEL) in the MCP server environment.',
+    };
+  }
+
+  // An image turns the user message into multimodal content, which only a
+  // vision model takes. Refusing here is the honest answer: the text-only
+  // model would otherwise silently ignore the photo.
+  const image = input.image?.trim() ?? '';
+  if (image && !isImageInput(image)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'The router image must be a data:image/…;base64,… URL or an http(s) URL.',
+    };
+  }
+  if (image && !spec?.vision) {
+    return {
+      ok: false,
+      status: 400,
+      error: `The model "${model}" does not take an image. Choose "${VISION_MODEL}" to route a photo.`,
+    };
+  }
+
+  const utterance = input.utterance.trim().slice(0, 2000);
+  const parts: LlmPart[] = [{ type: 'text', text: utterance }];
+  if (image) parts.push({ type: 'image', url: image });
+
+  let result: LlmResult;
+  try {
+    result = await chat({
+      provider,
+      model,
+      request: {
+        system: systemPrompt(Boolean(image), input.confirmed === true),
+        parts,
+        tools: asLlmTools(tools),
+        temperature: 0,
+      },
+      timeoutMs: TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    log.error({ err: error, kind: error.kind }, 'router: model call failed');
+    if (error.kind === 'timeout') {
+      return { ok: false, status: 502, error: `The router timed out after ${TIMEOUT_MS} ms.` };
+    }
+    if (error.kind === 'upstream') {
+      return {
+        ok: false,
+        status: 502,
+        error: `The router's model endpoint returned ${error.status}. ${error.detail}`.trim(),
+      };
+    }
+    return { ok: false, status: 502, error: 'The router could not reach its model endpoint.' };
+  }
+
+  // The model's text is the rationale; a tool call is the decision. Arguments
+  // that were not readable JSON are reported rather than passed on unparsed,
+  // exactly as the OpenAI-compatible path did before.
+  let decision: RouteDecision;
+  if (result.toolCall && result.toolArgumentsUnreadable) {
+    decision = {
+      tool: null,
+      arguments: {},
+      rationale: `The router returned arguments for ${result.toolCall.name} that are not JSON.`,
+    };
+  } else if (result.toolCall) {
+    decision = { tool: result.toolCall.name, arguments: result.toolCall.arguments, rationale: result.text };
+  } else {
+    decision = { tool: null, arguments: {}, rationale: result.text || 'No tool matched that request.' };
+  }
+
+  return { ok: true, decision, model: result.model };
 }
 
 export function registerRouterRoute(app: FastifyInstance): void {
@@ -162,105 +326,20 @@ export function registerRouterRoute(app: FastifyInstance): void {
     if (!isRecord(body) || typeof body.utterance !== 'string' || !body.utterance.trim()) {
       return reply.code(400).send({ error: 'The router body must be { utterance: string, tools: [...] }.' });
     }
-    const tools = Array.isArray(body.tools) ? (body.tools as AdvertisedTool[]) : [];
-    if (!tools.length || !tools.every((tool) => isRecord(tool) && typeof tool.name === 'string' && tool.name)) {
-      return reply.code(400).send({ error: 'The router body must list at least one tool with a name.' });
-    }
 
-    // A caller may name a model, but only one this router offers. An unknown
-    // name is refused rather than forwarded, so the allowlist cannot be walked
-    // past to bill some other model to this server's key. Each offered id
-    // carries the provider that serves it, so this one choice also picks
-    // whether the call goes to DeepSeek or to Amazon Bedrock Nova.
-    const { model: defaultModel } = deepseekConfig();
-    const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
-    const spec = requestedModel ? modelSpec(requestedModel) : modelSpec(defaultModel);
-    if (requestedModel && !spec) {
-      return reply.code(400).send({
-        error:
-          `This router does not offer the model "${requestedModel}". It offers: ` +
-          `${ROUTER_MODELS.map((model) => model.id).join(', ')}.`,
-      });
-    }
-    const model = spec?.id ?? defaultModel;
-    // An unlisted default (DEEPSEEK_MODEL set to something off the list) still
-    // goes to DeepSeek, which is the provider that name belongs to.
-    const provider: LlmProvider = spec?.provider ?? 'deepseek';
-    if (!providerConfigured(provider)) {
-      return reply.code(503).send({
-        error:
-          provider === 'nova'
-            ? 'The tool router is not configured for Nova. Set the Bedrock credentials ' +
-              '(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS_BEARER_TOKEN_BEDROCK ' +
-              'API key, and BEDROCK_REGION or AWS_REGION) in the MCP server environment.'
-            : 'The tool router is not configured. Set DEEPSEEK_API_KEY (and optionally ' +
-              'DEEPSEEK_BASE_URL / DEEPSEEK_MODEL) in the MCP server environment.',
-      });
-    }
+    const outcome = await routeToTool(
+      {
+        utterance: body.utterance,
+        tools: Array.isArray(body.tools) ? (body.tools as AdvertisedTool[]) : [],
+        ...(typeof body.model === 'string' ? { model: body.model } : {}),
+        ...(typeof body.image === 'string' ? { image: body.image } : {}),
+      },
+      request.log,
+    );
 
-    // An image turns the user message into multimodal content, which only a
-    // vision model takes. Refusing here is the honest answer: the text-only
-    // model would otherwise silently ignore the photo.
-    const image = typeof body.image === 'string' ? body.image.trim() : '';
-    if (image && !isImageInput(image)) {
-      return reply.code(400).send({
-        error: 'The router image must be a data:image/…;base64,… URL or an http(s) URL.',
-      });
-    }
-    if (image && !spec?.vision) {
-      return reply.code(400).send({
-        error: `The model "${model}" does not take an image. Choose "${VISION_MODEL}" to route a photo.`,
-      });
-    }
-
-    const utterance = body.utterance.trim().slice(0, 2000);
-    const parts: LlmPart[] = [{ type: 'text', text: utterance }];
-    if (image) parts.push({ type: 'image', url: image });
-
-    let result: LlmResult;
-    try {
-      result = await chat({
-        provider,
-        model,
-        request: {
-          system: systemPrompt(Boolean(image)),
-          parts,
-          tools: asLlmTools(tools),
-          temperature: 0,
-        },
-        timeoutMs: TIMEOUT_MS,
-      });
-    } catch (error) {
-      if (!(error instanceof LlmError)) throw error;
-      request.log.error({ err: error, kind: error.kind }, 'router: model call failed');
-      if (error.kind === 'timeout') {
-        return reply.code(502).send({ error: `The router timed out after ${TIMEOUT_MS} ms.` });
-      }
-      if (error.kind === 'upstream') {
-        return reply.code(502).send({
-          error: `The router's model endpoint returned ${error.status}. ${error.detail}`.trim(),
-        });
-      }
-      return reply.code(502).send({ error: 'The router could not reach its model endpoint.' });
-    }
-
-    // The model's text is the rationale; a tool call is the decision. Arguments
-    // that were not readable JSON are reported rather than passed on unparsed,
-    // exactly as the OpenAI-compatible path did before.
-    let decision: RouteDecision;
-    if (result.toolCall && result.toolArgumentsUnreadable) {
-      decision = {
-        tool: null,
-        arguments: {},
-        rationale: `The router returned arguments for ${result.toolCall.name} that are not JSON.`,
-      };
-    } else if (result.toolCall) {
-      decision = { tool: result.toolCall.name, arguments: result.toolCall.arguments, rationale: result.text };
-    } else {
-      decision = { tool: null, arguments: {}, rationale: result.text || 'No tool matched that request.' };
-    }
+    if (!outcome.ok) return reply.code(outcome.status).send({ error: outcome.error });
 
     // The model is echoed back so the host can say honestly which one answered.
-    return reply.send({ ...decision, model: result.model });
+    return reply.send({ ...outcome.decision, model: outcome.model });
   });
 }

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Globie Earth MCP server - forest knowledge, species recommendation and sanctuary tools over Streamable HTTP.",
+  "description": "Globie Earth MCP server - forest knowledge, species recommendation and live site tools over Streamable HTTP.",
   "engines": {
     "node": ">=22"
   },
@@ -13,6 +13,7 @@
     "start": "node dist/server.js",
     "dev": "tsc -p tsconfig.json && node dist/server.js",
     "simulate:alexa": "node --env-file=../.env scripts/simulate-alexa-plus.mjs",
+    "simulate:skill": "node --env-file=../.env scripts/simulate-alexa-skill.mjs",
     "backfill:embeddings": "node --env-file=../.env scripts/backfill-embeddings.mjs",
     "import:dnp": "node --env-file=../.env scripts/import-dnp.mjs",
     "import:dnp-plants": "node --env-file=../.env scripts/import-dnp-plants.mjs",

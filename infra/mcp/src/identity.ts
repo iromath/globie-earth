@@ -26,6 +26,17 @@ export interface Caller {
   deviceId: string;
   /** A GoTrue JWT, forwarded so the account policies apply. Never our own token. */
   bearer?: string;
+  /**
+   * A deadline this front door imposes on the tools, in milliseconds.
+   *
+   * Unset for the browser host, which has no such deadline and can afford the
+   * slowest enhancement. A voice front door does have one - Alexa abandons a
+   * request after ~8s and speaks "did not provide a valid response" - so the
+   * Alexa Skill adapter sets this and the tools skip any optional stage that
+   * cannot fit inside it (see rerank.ts). It never travels to PostgREST: only
+   * deviceId and bearer are sent as headers.
+   */
+  latencyBudgetMs?: number;
 }
 
 /** The schema's own length, so a bad id is rejected before it reaches Postgres. */

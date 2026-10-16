@@ -304,7 +304,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     }),
     {
       title: 'Guardian',
-      description: 'A guardian of the sanctuary - its lore, rarity and traits - by its id.',
+      description: 'A guardian of the site - its lore, rarity and traits - by its id.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {
@@ -353,7 +353,7 @@ export function registerCatalogResources(server: McpServer, caller: Caller): voi
     }),
     {
       title: 'Site',
-      description: 'A stop on the sanctuary trail, by its numeric id.',
+      description: 'A stop on the forest trail, by its numeric id.',
       mimeType: 'application/json',
     },
     async (uri, variables) => {

@@ -1,4 +1,4 @@
-// Live sanctuary conditions, read from Open-Meteo's keyless public APIs.
+// Live site conditions, read from Open-Meteo's keyless public APIs.
 //
 // Ported from src/lib/openMeteo.ts. The only change is the transport: the
 // browser module uses window.setTimeout to bound a hung request, and there is no
@@ -10,7 +10,7 @@
 //   - forecast:    relative humidity and air temperature at 2 m
 //
 // Honesty (house rule, AMAZON-MCP-PLAN.md 1.1): these are modelled fields for
-// the sanctuary's coordinates, not a sensor standing in the wetland, and the
+// the site's coordinates, not a sensor standing in the wetland, and the
 // tool description says so. The carbon dioxide field is a coarse global model,
 // so a null is handled rather than assumed away. Open-Meteo's free tier is
 // non-commercial; a paid key has to be added before the Forest Keeper Pass is
@@ -75,7 +75,7 @@ const numberOf = (value: number | null | undefined): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 /**
- * The sanctuary's current conditions, or null when nothing could be read. The
+ * The site's current conditions, or null when nothing could be read. The
  * two endpoints are read independently, so a failing forecast still leaves the
  * air quality figures reported.
  */

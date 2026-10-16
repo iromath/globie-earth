@@ -1,6 +1,6 @@
 // The Globie Earth MCP server.
 //
-// It exposes the app's existing catalogue, adoption and sanctuary capabilities
+// It exposes the app's existing catalogue, adoption and site-condition capabilities
 // as MCP tools over Streamable HTTP, so an Alexa+ (or any MCP) host can drive a
 // real reforestation backend by voice. It is self-hosted on the same Easypanel
 // stack as `studio`/`podcast` (decision D2) and is deliberately host-agnostic:
@@ -24,36 +24,19 @@ import Fastify from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { alexaHealth, registerAlexaRoute } from './alexa.js';
 import { contributeHealth, registerContributeRoute } from './contribute.js';
 import { getEmbeddingProvider } from './embed.js';
-import { resolveCaller, type Caller } from './identity.js';
+import { resolveCaller } from './identity.js';
+import { buildServer } from './mcp-server.js';
 import { registerModerateRoute } from './moderate.js';
 import { notificationsHealth, registerNotificationsRoutes } from './notifications.js';
 import { oauthHealth, registerOAuthRoutes } from './oauth.js';
-import { registerForestPrompts } from './prompts/forest.js';
 import { pushDispatcherHealth, startPushDispatcher } from './pushDispatcher.js';
-import { registerCatalogResources } from './resources/catalog.js';
-import { registerDeedResources } from './resources/deeds.js';
 import { registerRouterRoute, routerHealth } from './router.js';
 import { registerSpeechRoutes, speechHealth } from './speech.js';
-import { registerAdoptionTools } from './tools/adoption.js';
-import { registerCatalogTools } from './tools/catalog.js';
-import { registerConditionsTools } from './tools/conditions.js';
-import { registerCookbookTools } from './tools/cookbook.js';
-import { registerPhotoTools } from './tools/photo.js';
-import { registerPodcastTools } from './tools/podcast.js';
-import { registerStudioTools } from './tools/studio.js';
-import { registerWikiTools } from './tools/wiki.js';
-import { registerUiResources } from './ui/apps.js';
 import { registerWikiRoute } from './wiki-route.js';
 import { openmindConfigured } from './openmind/client.js';
-import { registerOpenmindCommunityTools } from './tools/openmind-community.js';
-import { registerOpenmindDestinationsTools } from './tools/openmind-destinations.js';
-import { registerOpenmindFlightsTools } from './tools/openmind-flights.js';
-import { registerOpenmindGuidesTools } from './tools/openmind-guides.js';
-import { registerOpenmindImpactTools } from './tools/openmind-impact.js';
-import { registerOpenmindToursTools } from './tools/openmind-tours.js';
-import { registerOpenmindTripsTools } from './tools/openmind-trips.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = '0.0.0.0';
@@ -88,6 +71,31 @@ const BODY_LIMIT_BYTES = 48 * 1024 * 1024;
 
 const app = Fastify({ logger: true, bodyLimit: BODY_LIMIT_BYTES });
 
+// Amazon signs the raw request bytes, so /alexa needs the body exactly as it
+// arrived. Fastify's default JSON parser throws those bytes away and hands the
+// handler a parsed object - and re-serialising that object would change key
+// order and whitespace, which is precisely what the signature covers. So the
+// parser is replaced by the same parser with one addition: it keeps the buffer
+// on the request as `rawBody`.
+//
+// Everything else about it is unchanged - the same JSON.parse, the same 400 on
+// malformed or empty input, the same bodyLimit - so every other route reads the
+// parsed body and cannot tell the difference.
+app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+  const buffer = body as Buffer;
+  (request as { rawBody?: Buffer }).rawBody = buffer;
+
+  if (!buffer.length) {
+    done(Object.assign(new Error("Body cannot be empty when content-type is set to 'application/json'"), { statusCode: 400 }), undefined);
+    return;
+  }
+  try {
+    done(null, JSON.parse(buffer.toString('utf8')));
+  } catch (error) {
+    done(Object.assign(error as Error, { statusCode: 400 }), undefined);
+  }
+});
+
 /** The first value of a possibly repeated header, trimmed, or null. */
 function headerString(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -101,57 +109,6 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
-
-/** A server with the caller's identity closed over its tools. */
-function buildServer(caller: Caller): McpServer {
-  const server = new McpServer(
-    { name: 'globie-earth', version: '1.0.0' },
-    {
-      instructions:
-        'Globie Earth is a reforestation sanctuary in Isaan, Thailand. Use these tools ' +
-        'to answer questions about its native species, sites and guardian lore, to ' +
-        'recommend a species the listener might adopt, to report live sanctuary ' +
-        'conditions, to find podcasts about the living world, and to explore local ' +
-        'culture through the sanctuary\'s own Thai cookbook (search_local_culture, then ' +
-        'get_recipe for the full ingredients and method). A listener may also attach a ' +
-        'photo: describe_photo reads any photo, not only trees. describe_species reads the ' +
-        'English Wikipedia lead for one species ' +
-        'by name - that is external reference text under CC BY-SA, so name Wikipedia as the ' +
-        'source and never present it as Globie data. Adoption and soundscape ' +
-        'tools are mutating and must be confirmed by the listener first; a soundscape is ' +
-        'queued, not produced, so never say one is ready. When you report sanctuary ' +
-        'conditions, say that they are modelled fields rather than on-site sensor readings.',
-    },
-  );
-
-  registerCatalogTools(server, caller);
-  registerCookbookTools(server, caller);
-  registerConditionsTools(server);
-  registerWikiTools(server);
-  registerPhotoTools(server);
-  registerAdoptionTools(server, caller);
-  registerStudioTools(server, caller);
-  registerPodcastTools(server, caller);
-
-  // Openmind.Travel tools: the same travel catalogue (tours, guides, flights,
-  // community, trip planning, impact) the web app exposes via browser-side
-  // WebMCP, re-served here as MCP tools over the public REST API.
-  registerOpenmindToursTools(server);
-  registerOpenmindGuidesTools(server);
-  registerOpenmindDestinationsTools(server);
-  registerOpenmindFlightsTools(server);
-  registerOpenmindCommunityTools(server);
-  registerOpenmindTripsTools(server);
-  registerOpenmindImpactTools(server);
-
-  registerCatalogResources(server, caller);
-  registerDeedResources(server, caller);
-  registerUiResources(server);
-
-  registerForestPrompts(server);
-
-  return server;
-}
 
 app.get('/health', () => {
   const embeddings = getEmbeddingProvider();
@@ -198,6 +155,14 @@ app.get('/health', () => {
     // server (oauth.ts). Dormant until MCP_OAUTH_SECRET is set, like every other
     // optional neighbour - unset only disables this path, never /mcp itself.
     oauth: oauthHealth(),
+    // The Alexa Skill (ASK) front door. A Skill is a different product from the
+    // Alexa+ add-on: Alexa matches an intent and posts the raw ASK envelope to
+    // /alexa, which routes it through the same router the browser host uses.
+    // `verifySignature` is the kill switch (ALEXA_VERIFY_SIGNATURE); `skillId`
+    // says whether the application id check can run at all; and
+    // `certExpiryGraceDays` is non-zero only where Amazon's own certificates are
+    // already retired and would otherwise fail every request.
+    alexa: alexaHealth(),
   };
 });
 
@@ -345,6 +310,12 @@ async function main(): Promise<void> {
   // the returned tool call itself - so the runtime proof stays on /mcp and the
   // model credential never reaches the page.
   registerRouterRoute(app);
+
+  // The Alexa Skill (ASK) webhook. It reuses the router above: one catch-all
+  // intent's utterance goes in, one tool call comes out, and the tool runs
+  // against the same in-process MCP surface - so a Skill is another front door
+  // onto this server rather than a second implementation of it.
+  registerAlexaRoute(app);
 
   // The voice cascade's ears and mouth. They sit beside /mcp for the same
   // reason /route does: the page posts audio here and this server relays it to

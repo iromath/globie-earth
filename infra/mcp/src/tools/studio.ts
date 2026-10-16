@@ -38,7 +38,9 @@ function spokenStatus(track: StudioTrack): string {
   const name = track.title ? `"${track.title}"` : 'Your soundscape';
   switch (track.status) {
     case 'ready':
-      return `${name} is ready. Play it in the client to hear it.`;
+      // Addressed to a voice listener as much as to a browser: on an Echo the
+      // only way to hear it is to ask for it by name (alexa.ts, playLatest-).
+      return `${name} is ready. Say, play my soundscape, to hear it.`;
     case 'failed':
       return `${name} could not be rendered.`;
     default:
@@ -52,7 +54,7 @@ export function registerStudioTools(server: McpServer, caller: Caller): void {
     {
       title: 'Generate a soundscape',
       description:
-        'Queues a generated piece of music for the sanctuary - for example an ambient ' +
+        'Queues a generated piece of music for the site - for example an ambient ' +
         'soundscape for a species or a site. This CHANGES STATE and spends the shared daily ' +
         'render quota, so ask before calling it. Rendering is asynchronous: the tool returns ' +
         'a track id and a status of "queued", and the audio becomes available later. It does ' +
