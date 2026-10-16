@@ -12,7 +12,7 @@ import type { Caller } from '../identity.js';
 import { get, rpc } from '../postgrest.js';
 import { rerankConfig, rerankHits } from '../rerank.js';
 import { uiUriForTool } from '../ui/apps.js';
-import { errorResult, jsonResult } from './result.js';
+import { errorResult, jsonResult, closestLine } from './result.js';
 
 /** One catalogue hit. `similarity` is cosine similarity, 0..1. */
 interface HitRow {
@@ -539,7 +539,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         const keywordAnswer = async (reason: string) => {
           const hits = await keywordSearch(query, entity_type, caller);
           const spoken = hits.length
-            ? `I found ${hits.length} keyword ${hits.length === 1 ? 'match' : 'matches'} for "${query}". The closest is ${hits[0].title}: ${hits[0].content} These are keyword matches over the catalogue text, not vector similarity.`
+            ? `I found ${hits.length} keyword ${hits.length === 1 ? 'match' : 'matches'} for "${query}". The closest is ${closestLine(hits[0].title, hits[0].content)} These are keyword matches over the catalogue text, not vector similarity.`
             : `I found no match for "${query}" in the forest knowledge. Try a plainer word or a species name.`;
           return jsonResult(
             {
@@ -625,7 +625,7 @@ export function registerCatalogTools(server: McpServer, caller: Caller): void {
         const top = ranked.slice(0, SEARCH_RESULTS);
 
         const spoken = top.length
-          ? `I found ${top.length} ${top.length === 1 ? 'passage' : 'passages'} for "${query}". The closest is ${top[0].title}: ${top[0].content}`
+          ? `I found ${top.length} ${top.length === 1 ? 'passage' : 'passages'} for "${query}". The closest is ${closestLine(top[0].title, top[0].content)}`
           : `I found nothing in the forest knowledge for "${query}".`;
 
         return jsonResult(

@@ -50,6 +50,7 @@
         },
         {
           "name": "PlaySoundscapeIntent",
+          "slots": [],
           "samples": [
             "play my soundscape",
             "play the soundscape",
@@ -65,6 +66,12 @@
         },
         {
           "name": "PlayPodcastIntent",
+          "slots": [
+            {
+              "name": "theme",
+              "type": "PodcastTheme"
+            }
+          ],
           "samples": [
             "play a podcast",
             "play the podcast",
@@ -74,7 +81,30 @@
             "listen to a podcast",
             "listen to a show",
             "start a podcast",
-            "play the forest podcast"
+            "play the {theme} podcast",
+            "play a {theme} podcast",
+            "listen to a {theme} podcast",
+            "play a podcast about {theme}",
+            "play a podcast on {theme}",
+            "play something about {theme}"
+          ]
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": []
+        },
+        {
+          "name": "NextEpisodeIntent",
+          "slots": [],
+          "samples": [
+            "next episode",
+            "play the next episode",
+            "go to the next episode",
+            "skip this episode",
+            "skip to the next one",
+            "another episode",
+            "play another episode",
+            "play the next one"
           ]
         },
         {
@@ -110,6 +140,7 @@
         },
         {
           "name": "PlayPublicTrackIntent",
+          "slots": [],
           "samples": [
             "play public music",
             "play public sound",
@@ -123,6 +154,7 @@
         },
         {
           "name": "DisableWebOfferIntent",
+          "slots": [],
           "samples": [
             "stop offering web search",
             "stop offering the web",
@@ -137,6 +169,7 @@
         },
         {
           "name": "EnableWebOfferIntent",
+          "slots": [],
           "samples": [
             "offer web search again",
             "turn web search back on",
@@ -171,11 +204,103 @@
             "i want to {query}",
             "help me {query}",
             "can you {query}",
-            "explore {query}"
+            "explore {query}",
+            "cook {query}",
+            "how to cook {query}",
+            "how do i cook {query}",
+            "recipe for {query}",
+            "recipe {query}",
+            "{query} recipe",
+            "make {query}",
+            "how to make {query}",
+            "how do i make {query}",
+            "ingredients for {query}",
+            "what goes in {query}"
           ]
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
         }
       ],
-      "types": []
+      "types": [
+        {
+          "name": "PodcastTheme",
+          "values": [
+            {
+              "name": {
+                "value": "meditation"
+              }
+            },
+            {
+              "name": {
+                "value": "mindfulness"
+              }
+            },
+            {
+              "name": {
+                "value": "nature"
+              },
+              "synonyms": [
+                "natural"
+              ]
+            },
+            {
+              "name": {
+                "value": "sustainability"
+              }
+            },
+            {
+              "name": {
+                "value": "climate"
+              },
+              "synonyms": [
+                "climate change"
+              ]
+            },
+            {
+              "name": {
+                "value": "science"
+              }
+            },
+            {
+              "name": {
+                "value": "motivational"
+              },
+              "synonyms": [
+                "motivation"
+              ]
+            },
+            {
+              "name": {
+                "value": "personal development"
+              },
+              "synonyms": [
+                "personal growth",
+                "self development"
+              ]
+            },
+            {
+              "name": {
+                "value": "forest"
+              },
+              "synonyms": [
+                "forestry",
+                "trees"
+              ]
+            },
+            {
+              "name": {
+                "value": "wellbeing"
+              },
+              "synonyms": [
+                "well being",
+                "wellness"
+              ]
+            }
+          ]
+        }
+      ]
     }
   }
 }

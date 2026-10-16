@@ -18,7 +18,7 @@ import type { Caller } from '../identity.js';
 import { get, rpc } from '../postgrest.js';
 import { rerankConfig, rerankHits } from '../rerank.js';
 import { uiUriForTool } from '../ui/apps.js';
-import { errorResult, jsonResult } from './result.js';
+import { errorResult, jsonResult, closestLine } from './result.js';
 
 /** One catalogue hit for a recipe. `similarity` is cosine similarity, 0..1. */
 interface HitRow {
@@ -129,8 +129,15 @@ function displayName(row: {
   name_local?: string | null;
   name_thai?: string | null;
 }): string {
-  const extra = [row.name_local, row.name_thai].filter(Boolean).join(', ');
-  return extra ? `${row.name_en} (${extra})` : row.name_en;
+  // name_en sometimes already prints the romanised name in its own brackets
+  // ("Green Curry with Chicken (Gaeng Keow Wan Gai)"), so a local or Thai name
+  // that is already in it is not repeated - which is what turned the same dish
+  // into "... (Gaeng Keow Wan Gai) (Gaeng Keow Wan Gai, Gaeng Keow Wan Gai)".
+  const extra = [row.name_local, row.name_thai].filter(
+    (name): name is string =>
+      Boolean(name) && !row.name_en.toLowerCase().includes(name!.toLowerCase()),
+  );
+  return extra.length ? `${row.name_en} (${extra.join(', ')})` : row.name_en;
 }
 
 /**
@@ -213,7 +220,19 @@ async function findRecipe(recipe: string, caller: Caller): Promise<RecipeRow | n
     if (bySlug.length) return bySlug[0];
   }
 
-  const encoded = encodeURIComponent(trimmed);
+  // PostgREST's `or=(...)` splits on parentheses, so a name that carries its
+  // romanised form in its own brackets - "Green Curry with Chicken (Gaeng Keow
+  // Wan Gai)", which is exactly what a search hit's title, and therefore what a
+  // follow-up like "how do I cook it" refers back to, looks like - can never
+  // match through it, and the recipe reads as missing. The bracket is a gloss a
+  // name search does not need, so it is dropped here; URL-encoding it does not
+  // help, because the query string is decoded before it is parsed.
+  const named =
+    trimmed
+      .replace(/\s*[(\[][^)\]]*[)\]]\s*$/, '')
+      .replace(/^["'“”]|["'“”]$/g, '')
+      .trim() || trimmed;
+  const encoded = encodeURIComponent(named);
   const byName = await get<RecipeRow[]>(
     `cookbook_recipes?select=${RECIPE_COLUMNS}` +
       `&or=(name_en.ilike.*${encoded}*,name_local.ilike.*${encoded}*)` +
@@ -221,6 +240,25 @@ async function findRecipe(recipe: string, caller: Caller): Promise<RecipeRow | n
     caller,
   );
   return byName[0] ?? null;
+}
+
+/**
+ * The spoken line for one cookbook search hit.
+ *
+ * A semantic hit's `content` is the whole flattened recipe - the names, the
+ * description, the entire ingredient list and every numbered step
+ * (scripts/backfill-embeddings.mjs) - so reading it aloud runs past a thousand
+ * characters and, on the book's longest dish, was cut off partway through step
+ * three of seven, which sounds like a dropped line rather than an answer. The
+ * search tool's job is to find the dish; the steps belong to get_recipe, which
+ * returns them numbered and fits the mouth. So the summary keeps the name and
+ * the description and stops where the ingredients begin. A keyword hit's
+ * `content` is already just the description, so the split leaves it whole.
+ */
+function spokenHit(title: string, content: string): string {
+  const brief =
+    content.split(/\s+(?:Ingredients|Method|Tips)\s*:/i)[0]?.trim() || content.trim();
+  return closestLine(title, brief);
 }
 
 export function registerCookbookTools(server: McpServer, caller: Caller): void {
@@ -266,7 +304,7 @@ export function registerCookbookTools(server: McpServer, caller: Caller): void {
         const keywordAnswer = async (reason: string) => {
           const hits = await keywordSearch(query, caller);
           const spoken = hits.length
-            ? `I found ${hits.length} ${hits.length === 1 ? 'recipe' : 'recipes'} for "${query}". The closest is ${hits[0].title}: ${hits[0].content} These are keyword matches over the cookbook text, not vector similarity.`
+            ? `I found ${hits.length} ${hits.length === 1 ? 'recipe' : 'recipes'} for "${query}". The closest is ${spokenHit(hits[0].title, hits[0].content)} Ask "how do I cook it" for the steps. These are keyword matches over the cookbook text, not vector similarity.`
             : `I found no recipe for "${query}" in the cookbook. Try a plainer word or a dish name.`;
           return jsonResult(
             {
@@ -337,7 +375,7 @@ export function registerCookbookTools(server: McpServer, caller: Caller): void {
         const top = ranked.slice(0, SEARCH_RESULTS);
 
         const spoken = top.length
-          ? `I found ${top.length} ${top.length === 1 ? 'recipe' : 'recipes'} for "${query}". The closest is ${top[0].title}: ${top[0].content}`
+          ? `I found ${top.length} ${top.length === 1 ? 'recipe' : 'recipes'} for "${query}". The closest is ${spokenHit(top[0].title, top[0].content)} Ask "how do I cook it" for the steps.`
           : `I found no recipe in the cookbook for "${query}".`;
 
         return jsonResult(
@@ -406,13 +444,33 @@ export function registerCookbookTools(server: McpServer, caller: Caller): void {
 
         const time = row.total_minutes != null ? `about ${row.total_minutes} minutes` : null;
         const serves = row.servings ? `serves ${row.servings}` : null;
+        // The method itself, not a count of it: "how do I cook it" is asking for
+        // the steps, and "7 steps" answered the question with a number. Each step
+        // carries the book's own time where it gave one, in the same shape
+        // backfill-embeddings.mjs flattens into the searchable passage. A long
+        // dish runs past what one breath can hold, so the spoken reply is left to
+        // the host's own clipping (alexa.ts, SPEECH_LIMIT) rather than truncated
+        // here, where the sentence boundary cannot be seen.
+        const method = row.steps.length
+          ? 'Step by step: ' +
+            row.steps
+              .map((step, index) => {
+                const number = step.step ?? index + 1;
+                const minutes =
+                  step.minutes === null || step.minutes === undefined || step.minutes === ''
+                    ? ''
+                    : ` (about ${step.minutes} minutes)`;
+                return `${number}. ${step.detail}${minutes}`;
+              })
+              .join(' ')
+          : null;
         const summary = [
           displayName(row),
           `is a ${row.category}${row.region ? ` from ${row.region} Thailand` : ''}.`,
           serves ? `It ${serves}` : null,
           time ? `and takes ${time}.` : null,
-          `${row.steps.length} ${row.steps.length === 1 ? 'step' : 'steps'}.`,
           row.description,
+          method,
         ]
           .filter(Boolean)
           .join(' ');

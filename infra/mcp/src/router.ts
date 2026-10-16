@@ -81,6 +81,16 @@ export interface RouteInput {
    * with this set, which is what turns the question into the call.
    */
   confirmed?: boolean;
+  /**
+   * What the listener's last tool-running turn was about, if anything.
+   *
+   * A follow-up can lean on a pronoun instead of naming its subject ("how do I
+   * cook it"), and there is nothing in that sentence for the router to act on
+   * by itself - the Skill keeps no session, so the only memory of the previous
+   * turn is what travels in the request (alexa.ts, LAST_SUBJECT_ATTRIBUTE).
+   * Stated in the prompt, this is the noun a bare "it" reads back to.
+   */
+  context?: string;
 }
 
 /** How long the upstream model may take before the route gives up. */
@@ -163,12 +173,29 @@ const CONFIRMED_CLAUSE =
   'The listener has already given their go-ahead for this request in the previous turn, so ' +
   'call the tool now instead of asking for confirmation again.';
 
+/**
+ * Stated only when the host named the previous turn's subject (RouteInput.context).
+ *
+ * A voice follow-up is often a pronoun and nothing else ("how do I cook it"),
+ * which on its own names nothing to route. The clause hands the model the one
+ * antecedent it cannot see for itself, so "it" reads back to the dish, species
+ * or place the last turn answered rather than being treated as a miss.
+ */
+function contextClause(context: string): string {
+  return (
+    `The listener's previous request was about "${context}", so a pronoun such as "it" or ` +
+    `"that" refers to that - read the current request back to "${context}" and route it to ` +
+    'the tool that serves it, rather than answering that the request names nothing.'
+  );
+}
+
 /** The router prompt for this request, with the photo clause stated only when one is attached. */
-function systemPrompt(hasImage: boolean, confirmed: boolean): string {
+function systemPrompt(hasImage: boolean, confirmed: boolean, context?: string): string {
   return [
     ...SYSTEM_PROMPT_BASE,
     ...(hasImage ? PHOTO_ATTACHED : NO_PHOTO),
     ...(confirmed ? [CONFIRMED_CLAUSE] : []),
+    ...(context && context.trim() ? [contextClause(context.trim())] : []),
     NO_TOOL_CLAUSE,
   ].join(' ');
 }
@@ -266,7 +293,7 @@ export async function routeToTool(input: RouteInput, log: FastifyBaseLogger): Pr
       provider,
       model,
       request: {
-        system: systemPrompt(Boolean(image), input.confirmed === true),
+        system: systemPrompt(Boolean(image), input.confirmed === true, input.context),
         parts,
         tools: asLlmTools(tools),
         temperature: 0,

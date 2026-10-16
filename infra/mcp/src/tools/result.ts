@@ -70,3 +70,34 @@ export function errorResult(error: unknown): CallToolResult {
         : 'The tool failed for an unknown reason.';
   return { content: [{ type: 'text', text: message }], isError: true };
 }
+
+/**
+ * "Title: body" for the ear, with the name said once.
+ *
+ * A search hit's `title` and its `content` are two different strings and both
+ * are spoken after a "the closest is", which reads well when the body is a
+ * plain description - a keyword hit's content, say, which never names the dish.
+ * A semantic hit is the other case: the passage the database stores opens with
+ * the entity's own name (backfill-embeddings.mjs), so prefixing the title says
+ * the name twice - "Green Curry with Chicken (Gaeng Keow Wan Gai): Green Curry
+ * with Chicken (Gaeng Keow Wan Gai) ...". When the body already opens with the
+ * title, the title is folded away and any bracket the passage repeats straight
+ * after it (a romanised or Thai name the title already carries) is dropped too,
+ * leaving the name once and the rest of the passage intact.
+ */
+export function closestLine(title: string, content: string): string {
+  const name = title.trim();
+  const body = content.trim();
+  if (!name) return body;
+  if (!body.toLowerCase().startsWith(name.toLowerCase())) {
+    return `${name}: ${body}`;
+  }
+  let rest = body.slice(name.length);
+  for (;;) {
+    const bracket = rest.match(/^\s*\(([^)]*)\)/);
+    if (!bracket || !name.toLowerCase().includes(bracket[1].toLowerCase())) break;
+    rest = rest.slice(bracket[0].length);
+  }
+  rest = rest.replace(/^\s*[—–:,-]+\s*/, '').trim();
+  return rest ? `${name}: ${rest}` : name;
+}

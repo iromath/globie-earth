@@ -72,8 +72,18 @@ import { buildServer } from './mcp-server.js';
 import { absoluteUrl, callProxy } from './proxy.js';
 import { routeToTool } from './router.js';
 
-/** Alexa speaks plain text up to 8000 characters; a spoken answer stays far shorter. */
-const SPEECH_LIMIT = 700;
+/**
+ * Alexa speaks plain text up to 8000 characters and abandons a response after
+ * about four minutes; a spoken answer stays far shorter than either.
+ *
+ * The figure is set by the cookbook: "how do I cook it" is answered by the
+ * steps themselves, and the book's longest dish (Hat-Yai Fried Chicken, seven
+ * steps) runs to roughly 1,700 characters with its per-step times. Clipping at
+ * the old 700 left a listener partway through step three of seven, which read
+ * as a dropped connection rather than an answer. Everything else this adapter
+ * speaks is a sentence or two, so the higher ceiling costs nothing elsewhere.
+ */
+const SPEECH_LIMIT = 1800;
 
 /**
  * How long the tools may take before this adapter has to answer regardless.
@@ -115,6 +125,24 @@ const NO_MATCH_SPEECH =
   'I could not find a tool for that. Try asking about the forest’s species, the ' +
   'site’s conditions, the cookbook, or travel planning.';
 
+/**
+ * One filled slot, as the interaction model's entity resolution left it.
+ *
+ * `value` is what the caller *said*; the value the slot type actually matched
+ * is only inside `resolutions` - spoken "wellness" arrives as
+ * `value: "wellness"` with `name: "wellbeing"` in the resolution - so both are
+ * carried and the resolved one is what a lookup should use.
+ */
+interface AlexaSlot {
+  value?: string;
+  resolutions?: {
+    resolutionsPerAuthority?: Array<{
+      status?: { code?: string };
+      values?: Array<{ value?: { name?: string } }>;
+    }>;
+  };
+}
+
 /** The slice of the ASK envelope this adapter reads. */
 interface AlexaEnvelope {
   version?: string;
@@ -128,12 +156,23 @@ interface AlexaEnvelope {
      */
     attributes?: Record<string, unknown>;
   };
-  context?: { System?: { user?: { userId?: string; accessToken?: string } } };
+  context?: {
+    System?: { user?: { userId?: string; accessToken?: string } };
+    /**
+     * What the device's player is doing, present while a stream is under way.
+     *
+     * `token` is the one this skill put in the Play directive, so it is how an
+     * incoming intent names the stream it is about - there is no session to ask
+     * (see playNextEpisode). The Alexa+ host sends it with every request that
+     * arrives while audio is playing.
+     */
+    AudioPlayer?: { token?: string; offsetInMilliseconds?: number; playerActivity?: string };
+  };
   request?: {
     type?: string;
     requestId?: string;
     timestamp?: string;
-    intent?: { name?: string; slots?: Record<string, { value?: string } | undefined> };
+    intent?: { name?: string; slots?: Record<string, AlexaSlot | undefined> };
     /**
      * Present on the AudioPlayer events, and the only thing that names which
      * stream the event is about: the token we put in the Play directive comes
@@ -202,6 +241,18 @@ const PENDING_WEB_ATTRIBUTE = 'globiePendingWeb';
  * offer is appended to a site search's answer.
  */
 const WEB_OFFER_ATTRIBUTE = 'globieWebOfferOff';
+
+/**
+ * What the last turn that ran a tool was about, so a follow-up can lean on it.
+ *
+ * "How do I cook it" names no dish: the word "it" points back at whatever the
+ * previous turn answered, and nothing else in this webhook can see that far
+ * back - as with the pending sentence, the session attributes are the only
+ * memory this channel has. The subject kept here (a dish, a species, a place)
+ * is handed to the router on the next turn so it can read the pronoun back to
+ * its subject instead of answering that the sentence names nothing.
+ */
+const LAST_SUBJECT_ATTRIBUTE = 'globieLastSubject';
 
 /** A spoken answer, and keeps the session open for a follow-up. */
 function spoken(text: string, sessionAttributes: Record<string, unknown> = {}): AlexaSpeech {
@@ -363,6 +414,17 @@ interface PodcastFeeds {
     title: string;
     /** The publisher's own audio file - what a podcast app streams. */
     newestEnclosureUrl: string | null;
+  }>;
+}
+
+/** The slice of GET /v1/podcast/feeds/:id/episodes this adapter plays from. */
+interface PodcastEpisodes {
+  episodes?: Array<{
+    id: number;
+    title: string;
+    /** The publisher's direct audio file - what a podcast app streams. */
+    enclosureUrl: string;
+    durationSec: number | null;
   }>;
 }
 
@@ -622,6 +684,15 @@ interface AnswerOutcome {
    * again, which would only re-pick the tool that just answered.
    */
   webQuery?: string;
+  /**
+   * What this turn was about, for the next follow-up to lean on.
+   *
+   * Set from the tool that actually ran - the dish or species that answered,
+   * named cleanly rather than as the question that reached it - and kept in the
+   * session attributes (LAST_SUBJECT_ATTRIBUTE). Absent on a turn that ran
+   * nothing, which leaves whatever the previous turn left in place.
+   */
+  subject?: string;
 }
 
 /**
@@ -699,13 +770,21 @@ const WEB_OFFER_ON_SPEECH =
  * forces a named tool with the utterance as its `query`, which is how the web
  * offer's "yes" becomes a search without going near the router. `offerWeb` is
  * false once the listener has asked not to be offered the open web any more
- * (WEB_OFFER_ATTRIBUTE, read in the request handler).
+ * (WEB_OFFER_ATTRIBUTE, read in the request handler). `lastSubject` is what the
+ * previous turn was about, handed to the router so a follow-up that leans on a
+ * pronoun ("how do I cook it") can be read back to its subject
+ * (LAST_SUBJECT_ATTRIBUTE).
  */
 async function answer(
   utterance: string,
   caller: Caller,
   log: FastifyInstance['log'],
-  options: { confirmed?: boolean; tool?: string; offerWeb?: boolean } = {},
+  options: {
+    confirmed?: boolean;
+    tool?: string;
+    offerWeb?: boolean;
+    lastSubject?: string;
+  } = {},
 ): Promise<AnswerOutcome> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = buildServer(caller);
@@ -727,7 +806,16 @@ async function answer(
     const { tools } = await client.listTools();
 
     const routed = await routeToTool(
-      { utterance, tools, ...(options.confirmed ? { confirmed: true } : {}) },
+      {
+        utterance,
+        tools,
+        ...(options.confirmed ? { confirmed: true } : {}),
+        // What the last tool-running turn was about. A follow-up that leans on a
+        // pronoun ("how do I cook it") names nothing the router can act on, so
+        // the subject is stated in the prompt for it to read the pronoun back
+        // against (router.ts, RouteInput.context).
+        ...(options.lastSubject ? { context: options.lastSubject } : {}),
+      },
       log,
     );
     if (!routed.ok) {
@@ -735,9 +823,14 @@ async function answer(
       return { speech: refusalSpeech(routed.status, routed.error), awaitingGoAhead: false };
     }
 
-    const { tool, arguments: toolArguments, rationale } = routed.decision;
+    const { tool, arguments: toolArguments } = routed.decision;
     if (!tool) {
-      return { speech: toSpeech(rationale) || NO_MATCH_SPEECH, awaitingGoAhead: true };
+      // The router's own line for a miss is a note written for the model, not
+      // for an ear ("...doesn't name a dish or ask anything a tool can act
+      // on"), so it is never read aloud. The listener hears a sentence written
+      // for them instead - one that names the last subject when there is one, so
+      // a near-miss follow-up can still be spelled out.
+      return { speech: noMatchSpeech(options.lastSubject), awaitingGoAhead: true };
     }
 
     // A spend-gated tool may not run on the strength of the model's word alone.
@@ -753,24 +846,36 @@ async function answer(
 
     const result = await client.callTool({ name: tool, arguments: toolArguments });
 
-    // A site search is followed by an offer to try the open web: the site's own
-    // records are what answered, and they are not the whole world. The offer is
-    // an open question with the words kept beside it (webQuery), so a following
-    // "yes" searches the web for them rather than routing the sentence back into
-    // the tool that just answered. A listener who has turned the offer off hears
-    // the plain answer instead (WEB_OFFER_ATTRIBUTE), and a second pass over an
-    // already-confirmed sentence is never offered again - that turn was already
-    // answering the question this one would ask.
-    if (!options.confirmed && options.offerWeb !== false && SITE_SEARCH_TOOLS.has(tool)) {
-      log.info({ tool }, 'alexa: offering the open web after a site search');
+    // What this turn was about, for the next follow-up to lean on. Read from the
+    // tool's own answer where it names one - a dish, a species - so the subject
+    // the next turn leans on is a noun, not the question that reached it.
+    const subject = subjectFrom(result, toolArguments, utterance);
+
+    // A site search the site's own records could not answer is the one case the
+    // open web is for: the question is genuinely outside the catalogue. A search
+    // that *did* answer has said its last word, so the listener is not talked
+    // over with a question about somewhere else (siteAnswered) - which used to
+    // happen after every good cookbook answer, turning a "yes" into a web page
+    // instead of the recipe already in hand. A listener who has turned the offer
+    // off hears the plain answer too (WEB_OFFER_ATTRIBUTE), and a second pass
+    // over an already-confirmed sentence is never offered again - that turn was
+    // already answering the question this one would ask.
+    if (
+      !options.confirmed &&
+      options.offerWeb !== false &&
+      SITE_SEARCH_TOOLS.has(tool) &&
+      !siteAnswered(result)
+    ) {
+      log.info({ tool }, 'alexa: offering the open web after an empty site search');
       return {
         speech: `${speakableResult(result) || NO_MATCH_SPEECH}${WEB_OFFER_SUFFIX}`,
         awaitingGoAhead: true,
         webQuery: utterance,
+        subject,
       };
     }
 
-    return { speech: speakableResult(result) || NO_MATCH_SPEECH, awaitingGoAhead: false };
+    return { speech: speakableResult(result) || NO_MATCH_SPEECH, awaitingGoAhead: false, subject };
   } finally {
     await client.close().catch(() => {});
     await server.close().catch(() => {});
@@ -794,6 +899,12 @@ function webOfferSuppressed(envelope: AlexaEnvelope): boolean {
   return envelope.session?.attributes?.[WEB_OFFER_ATTRIBUTE] === true;
 }
 
+/** The subject the last tool-running turn left behind, or null (LAST_SUBJECT_ATTRIBUTE). */
+function lastSubject(envelope: AlexaEnvelope): string | null {
+  const value = envelope.session?.attributes?.[LAST_SUBJECT_ATTRIBUTE];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 /**
  * The session attributes every in-session reply should carry.
  *
@@ -801,15 +912,95 @@ function webOfferSuppressed(envelope: AlexaEnvelope): boolean {
  * whatever the last turn left behind - which would take the listener's "do not
  * offer me the open web" answer with it, since that answer is meant to last the
  * conversation. So each reply inside a session re-states the flag through here;
- * anything the turn itself wants to leave behind is merged on top.
+ * anything the turn itself wants to leave behind is merged on top. The last
+ * subject is carried the same way: it is the memory a follow-up leans on, so a
+ * turn that named no new subject must not erase the one it inherited.
  */
 function keepAttributes(
   envelope: AlexaEnvelope,
   attributes: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return webOfferSuppressed(envelope)
-    ? { ...attributes, [WEB_OFFER_ATTRIBUTE]: true }
-    : attributes;
+  const kept: Record<string, unknown> = { ...attributes };
+  if (webOfferSuppressed(envelope)) kept[WEB_OFFER_ATTRIBUTE] = true;
+  const subject = lastSubject(envelope);
+  if (subject && kept[LAST_SUBJECT_ATTRIBUTE] === undefined) {
+    kept[LAST_SUBJECT_ATTRIBUTE] = subject;
+  }
+  return kept;
+}
+
+/**
+ * What to say when the router found nothing to run.
+ *
+ * The router explains itself for the model, not the listener, so that line is
+ * not spoken. This is written for the ear instead, and names the last subject
+ * when there is one so a near-miss follow-up can be spelled out rather than
+ * answered with a generic prompt.
+ */
+function noMatchSpeech(subject: string | null | undefined): string {
+  return subject
+    ? `I did not find anything to run for that. If it was about ${subject}, try putting it a ` +
+        'little more directly. What would you like to know?'
+    : NO_MATCH_SPEECH;
+}
+
+/**
+ * What to say when no sample matched at all - most often AMAZON.FallbackIntent,
+ * which arrives with no utterance to route (see the dispatch). Naming the last
+ * subject is the only context left to offer, and it is enough to tell the
+ * listener the skill was following along rather than starting over.
+ */
+function fallbackSpeech(subject: string): string {
+  return (
+    `I did not catch a question in that. We were talking about ${subject} - say a little more ` +
+    'about what you want to know, or ask me something else.'
+  );
+}
+
+/**
+ * What a tool-running turn was about, for the next follow-up to lean on.
+ *
+ * The name of what actually answered is the cleanest subject to carry, so a
+ * hit's own title is preferred - with a trailing parenthetical ("Green Curry
+ * with Chicken (Gaeng Keow Wan Gai)") trimmed to the name a listener would say.
+ * get_recipe carries no hits list, so its payload's dish names stand in; the
+ * raw sentence is the last resort.
+ */
+function subjectFrom(
+  result: unknown,
+  toolArguments: Record<string, unknown>,
+  utterance: string,
+): string {
+  const record = isRecord(result) ? result : {};
+  const payload = isRecord(record.structuredContent) ? record.structuredContent : {};
+  const hits = Array.isArray(payload.hits) ? payload.hits : [];
+  const first = isRecord(hits[0]) ? hits[0] : {};
+  if (typeof first.title === 'string' && first.title.trim()) {
+    return first.title.trim().replace(/\s*\([^)]*\)\s*$/, '').trim();
+  }
+  for (const key of ['nameEn', 'nameLocal', 'nameThai']) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  for (const value of Object.values(toolArguments)) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return utterance;
+}
+
+/**
+ * Whether a site search actually answered from Globie's own records.
+ *
+ * Both site searches report their catalogue rows in `hits` (tools/catalog.ts,
+ * tools/cookbook.ts), and an empty list is the one case the open-web offer is
+ * for: the question is genuinely outside the site. Anything unreadable counts as
+ * an answer, so the offer never appears on a tool it was not designed for.
+ */
+function siteAnswered(result: unknown): boolean {
+  const record = isRecord(result) ? result : {};
+  const payload = isRecord(record.structuredContent) ? record.structuredContent : {};
+  const hits = Array.isArray(payload.hits) ? payload.hits : null;
+  return hits === null ? true : hits.length > 0;
 }
 
 /**
@@ -973,34 +1164,166 @@ function playMeditation(
   );
 }
 
+/** One episode, as the list route reports it. */
+type PodcastEpisode = NonNullable<PodcastEpisodes['episodes']>[number];
+
+/** One show on a podcast shelf. */
+type PodcastFeed = NonNullable<PodcastFeeds['feeds']>[number];
+
 /**
- * Plays the freshest episode of a forest podcast from the public library.
+ * How many episodes of a show are read, so "next" has somewhere to go.
+ *
+ * The same list also names the newest episode, so this is the lookup depth as
+ * well as the queue depth.
+ */
+const PODCAST_QUEUE = 10;
+
+/**
+ * The token that names one episode: its show, and its place in that show.
+ *
+ * `podcast:<feedId>:<index>` is the third token vocabulary in this file - see
+ * nextMeditationStep for `meditation:<n>` and playMeditation for `guide:<name>`
+ * - and it carries its own state the same way: the device echoes the token back
+ * on every playback event and on every request sent while it plays, so the index
+ * (0-based, newest first) is how a later "next" finds its neighbour without this
+ * server keeping a queue.
+ */
+function podcastToken(feedId: number, index: number): string {
+  return `podcast:${feedId}:${index}`;
+}
+
+/** The show and position a playing token names, or null for any other stream. */
+function parsePodcastToken(token: string | undefined): { feedId: number; index: number } | null {
+  const played = /^podcast:(\d+):(\d+)$/.exec(token ?? '');
+  if (!played) return null;
+  return { feedId: Number(played[1]), index: Number(played[2]) };
+}
+
+/**
+ * The theme a PlayPodcastIntent named, or null for the default forest shelf.
+ *
+ * The slot is the custom PodcastTheme type, whose values are the listening
+ * themes themselves (infra/podcast/src/themes.ts). Alexa echoes back what was
+ * *said*, not what it matched - "play a wellness podcast" arrives as
+ * `value: "wellness"` with the canonical `wellbeing` only inside `resolutions`
+ * - and the library knows only the canonical one, so the resolved value is
+ * what a lookup must use. The raw value is the fallback for a slot filled
+ * without entity resolution (a Manual JSON request, say).
+ *
+ * Either way the answer is normalised to the slug the library's themes use:
+ * the model's value is "personal development", the library's is
+ * "personal-development", and passing the model's form on would be rejected.
+ */
+function podcastThemeFrom(request: AlexaEnvelope['request']): string | null {
+  const slot = request?.intent?.slots?.theme;
+  const resolved = slot?.resolutions?.resolutionsPerAuthority
+    ?.flatMap((authority) => authority?.values ?? [])
+    .map((entry) => entry?.value?.name)
+    .find((name) => name?.trim());
+  const value = (resolved ?? slot?.value)?.trim();
+  return value ? value.toLowerCase().replace(/\s+/g, '-') : null;
+}
+
+/**
+ * The episodes of one show, newest first, as the library holds them now.
+ *
+ * Read live rather than out of the mirror: the mirror's newestEnclosureUrl only
+ * moves when it is next crawled - it was three episodes behind the live list
+ * when this was written - so the episode list is what actually names the newest
+ * episode.
+ *
+ * A list the index will not answer for is not fatal, because the mirror still
+ * carries one playable URL for the show; the failure is reported and an empty
+ * list returned, and the caller falls back to that URL.
+ */
+async function podcastEpisodes(
+  feedId: number,
+  caller: Caller,
+  log: FastifyInstance['log'],
+): Promise<PodcastEpisode[]> {
+  try {
+    const { episodes } = await callProxy<PodcastEpisodes>(
+      'podcast',
+      `/v1/podcast/feeds/${feedId}/episodes?max=${PODCAST_QUEUE}`,
+      caller,
+    );
+    return (episodes ?? []).filter((episode) => episode.enclosureUrl);
+  } catch (error) {
+    log.warn({ err: error, feedId }, 'alexa: could not read a show’s episode list');
+    return [];
+  }
+}
+
+/**
+ * The freshest playable show on one shelf, or undefined if that shelf has
+ * nothing to offer - including when it refuses to answer at all.
+ *
+ * A refusal is absorbed rather than raised because a shelf is only ever one
+ * attempt at a theme: `bytheme` answers 400 for a theme its list does not
+ * carry (`{ error: "bytheme needs a theme from /v1/podcast/themes." }`), which
+ * is a miss to fall past - the caller's next shelf may still answer - not a
+ * reason to abandon the turn.
+ */
+async function freshestShow(
+  shelf: string,
+  caller: Caller,
+  log: FastifyInstance['log'],
+): Promise<PodcastFeed | undefined> {
+  try {
+    const { feeds } = await callProxy<PodcastFeeds>('podcast', shelf, caller);
+    return (feeds ?? []).find((feed) => feed.newestEnclosureUrl);
+  } catch (error) {
+    log.warn({ err: error, shelf }, 'alexa: a podcast shelf did not answer');
+    return undefined;
+  }
+}
+
+/**
+ * Plays the freshest episode of a show from the public library.
  *
  * The stream is the publisher's own enclosureUrl, which is how a podcast is
  * meant to be played and what the podcast plan specifies - the show's file is
- * linked, never rehosted. The search route reports it alongside the show it
- * belongs to; that is enough to name the show and start the episode in one
- * call, so no episode lookup is needed.
+ * linked, never rehosted. A theme narrows the shelf to that theme's shows; with
+ * no theme the freshest forest show is used, which is the one show this skill
+ * played before themes could be named by voice.
+ *
+ * A named theme is asked of `bytheme` first and of the library's keyword search
+ * second, so a word the theme list does not carry still finds its shows rather
+ * than ending the turn; only when neither shelf answers is the caller told
+ * there is no such podcast.
  */
 async function playPodcast(
   caller: Caller,
   log: FastifyInstance['log'],
   carry: Record<string, unknown>,
+  theme: string | null,
 ): Promise<AlexaSpeech | AlexaDirective> {
+  const shelves = theme
+    ? [
+        `/v1/podcast/bytheme?theme=${encodeURIComponent(theme)}&max=5`,
+        `/v1/podcast/search?q=${encodeURIComponent(theme)}&max=5`,
+      ]
+    : ['/v1/podcast/search?q=forest&max=5'];
+
   try {
-    const { feeds } = await callProxy<PodcastFeeds>(
-      'podcast',
-      '/v1/podcast/search?q=forest&max=5',
-      caller,
-    );
-    const ready = (feeds ?? []).find((feed) => feed.newestEnclosureUrl);
-    if (!ready?.newestEnclosureUrl) {
-      return spoken('I could not find a podcast episode to play just now.', carry);
+    let show: PodcastFeed | undefined;
+    for (const shelf of shelves) {
+      show = await freshestShow(shelf, caller, log);
+      if (show) break;
     }
+    if (!show?.newestEnclosureUrl) {
+      return spoken(
+        theme
+          ? `I could not find a ${theme.replace(/-/g, ' ')} podcast to play just now.`
+          : 'I could not find a podcast episode to play just now.',
+        carry,
+      );
+    }
+    const episodes = await podcastEpisodes(show.id, caller, log);
     return announcing(
-      `Here is the latest episode of ${ready.title}.`,
-      ready.newestEnclosureUrl,
-      `podcast:${ready.id}`,
+      `Here is the latest episode of ${show.title}.`,
+      episodes[0]?.enclosureUrl ?? show.newestEnclosureUrl,
+      podcastToken(show.id, 0),
     );
   } catch (error) {
     log.error({ err: error }, 'alexa: could not play a podcast');
@@ -1009,6 +1332,34 @@ async function playPodcast(
       carry,
     );
   }
+}
+
+/**
+ * Moves to the episode after the one now playing.
+ *
+ * The playing stream is named by the token the device reports on the request -
+ * the same token its Play directive carried - so `podcast:<feedId>:<index>` is
+ * all this needs to find the neighbour. Only a podcast is skippable: a guided
+ * session is one file with nothing behind it, and a meditation lesson is chained
+ * by nextMeditationStep instead - so both are answered by their tokens simply
+ * not parsing here.
+ */
+async function playNextEpisode(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  carry: Record<string, unknown>,
+  token: string | undefined,
+): Promise<AlexaSpeech | AlexaDirective> {
+  const playing = parsePodcastToken(token);
+  if (!playing) return spoken('Nothing is playing that I can move past.', carry);
+  const episodes = await podcastEpisodes(playing.feedId, caller, log);
+  const next = episodes[playing.index + 1];
+  if (!next) return spoken('That is the last episode I have for this show.', carry);
+  return announcing(
+    'Here is the next episode.',
+    next.enclosureUrl,
+    podcastToken(playing.feedId, playing.index + 1),
+  );
 }
 
 /** What /health reports about this front door. */
@@ -1144,6 +1495,31 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       }
       return reply.send(await playLatestSoundscape(caller, request.log, keepAttributes(envelope)));
     }
+    // "Next" only means something while a podcast plays, and the only thing that
+    // names that podcast is the token the device is holding - the one this skill
+    // put in its Play directive and which the host echoes back here on every
+    // request that arrives mid-stream. A token for anything else (a guided
+    // session, a meditation lesson, a soundscape) simply does not parse.
+    // AMAZON.NextIntent ships with its own utterance set and the model cannot
+    // extend it, so the phrased forms ("next episode") arrive as our own
+    // NextEpisodeIntent - the two mean the same thing here.
+    if (intent === 'AMAZON.NextIntent' || intent === 'NextEpisodeIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot change the episode.', keepAttributes(envelope)),
+        );
+      }
+      return reply.send(
+        await playNextEpisode(
+          caller,
+          request.log,
+          keepAttributes(envelope),
+          envelope.context?.AudioPlayer?.token,
+        ),
+      );
+    }
     // The three share one branch because they differ only in which track they
     // pick - all three take the caller, decide a URL, and hand the device a Play
     // directive (announcing their choice first).
@@ -1160,7 +1536,9 @@ export function registerAlexaRoute(app: FastifyInstance): void {
         );
       }
       if (intent === 'PlayPodcastIntent') {
-        return reply.send(await playPodcast(caller, request.log, keepAttributes(envelope)));
+        return reply.send(
+          await playPodcast(caller, request.log, keepAttributes(envelope), podcastThemeFrom(envelope.request)),
+        );
       }
       if (intent === 'PlayPublicTrackIntent') {
         return reply.send(await playPublicTrack(caller, request.log, keepAttributes(envelope)));
@@ -1172,14 +1550,22 @@ export function registerAlexaRoute(app: FastifyInstance): void {
 
     // Everything else that is not our own intent is a model miss - most often
     // AMAZON.FallbackIntent, which arrives with no utterance to route. Asking
-    // the listener to rephrase is the only honest thing left to do.
+    // the listener to rephrase is the only honest thing left to do, and naming
+    // the last subject keeps the thread: "we were talking about green curry"
+    // tells the listener the skill was following along rather than starting over.
     if (intent !== 'AskGlobieIntent') {
-      return reply.send(spoken(FALLBACK_SPEECH, keepAttributes(envelope)));
+      const subject = lastSubject(envelope);
+      return reply.send(
+        spoken(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH, keepAttributes(envelope)),
+      );
     }
 
     const utterance = envelope.request?.intent?.slots?.query?.value?.trim() ?? '';
     if (!utterance) {
-      return reply.send(spoken(FALLBACK_SPEECH, keepAttributes(envelope)));
+      const subject = lastSubject(envelope);
+      return reply.send(
+        spoken(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH, keepAttributes(envelope)),
+      );
     }
 
     const caller = callerFor(envelope);
@@ -1196,6 +1582,7 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     try {
       const answered = await answer(utterance, caller, request.log, {
         offerWeb: !webOfferSuppressed(envelope),
+        lastSubject: lastSubject(envelope) ?? undefined,
       });
       // A turn that left a question open is the one this reply has to keep
       // answerable. The words go into the session attributes, and a following
@@ -1206,12 +1593,18 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       // leaves the attributes to keepAttributes alone - and an empty set there
       // is what actually drops the sentence, since a reply that omits the key
       // leaves the previous one in place.
-      const pending: Record<string, unknown> = !answered.awaitingGoAhead
-        ? {}
-        : answered.webQuery
-          ? { [PENDING_WEB_ATTRIBUTE]: answered.webQuery }
-          : { [PENDING_ATTRIBUTE]: utterance };
-      return reply.send(spoken(answered.speech, keepAttributes(envelope, pending)));
+      //
+      // What this turn was about travels the same way: a new subject is written
+      // over the old one so a follow-up leans on the latest thing answered, while
+      // a turn that named nothing new leaves keepAttributes to carry the old one
+      // forward.
+      const carried: Record<string, unknown> = {};
+      if (answered.subject) carried[LAST_SUBJECT_ATTRIBUTE] = answered.subject;
+      if (answered.awaitingGoAhead) {
+        if (answered.webQuery) carried[PENDING_WEB_ATTRIBUTE] = answered.webQuery;
+        else carried[PENDING_ATTRIBUTE] = utterance;
+      }
+      return reply.send(spoken(answered.speech, keepAttributes(envelope, carried)));
     } catch (error) {
       request.log.error({ err: error }, 'alexa: the utterance failed');
       return reply.send(
