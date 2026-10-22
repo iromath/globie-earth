@@ -70,6 +70,37 @@ function intent(name, query) {
   return { type: 'IntentRequest', intent: { name, confirmationStatus: 'NONE', ...(slots ? { slots } : {}) } };
 }
 
+/** An intent whose only slot is not `query` (the TV pair intent carries `code`). */
+function intentWithSlot(name, slot, value) {
+  return {
+    type: 'IntentRequest',
+    intent: {
+      name,
+      confirmationStatus: 'NONE',
+      slots: { [slot]: { name: slot, value, confirmationStatus: 'NONE' } },
+    },
+  };
+}
+
+/** The relay routes live on the same origin as /alexa. */
+function relayUrl(path, params = {}) {
+  const url = new URL(ALEXA_URL);
+  url.pathname = path;
+  url.search = '';
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  return url;
+}
+
+const DIGIT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+
+/** How the recogniser hands a spoken code to the slot: words, not digits. */
+function spokenDigits(code) {
+  return code
+    .split('')
+    .map(digit => DIGIT_WORDS[Number(digit)] ?? digit)
+    .join(' ');
+}
+
 /** One POST of an envelope. Signs nothing - see the header comment. */
 async function post(request) {
   const response = await fetch(ALEXA_URL, {
@@ -154,6 +185,63 @@ if (verifySignature !== false) {
       console.error('   ! expected a 200 with spoken text');
     }
     if (label.startsWith('5.')) stopping = body?.response?.shouldEndSession === true;
+  }
+
+  // --- The TV relay ------------------------------------------------------
+  // The Skill cannot navigate the television: every directive it can send
+  // only speaks or plays audio. "Search the TV for ..." therefore becomes a
+  // command the Vega app polls for. This walks that path with the same
+  // envelopes Alexa sends - the TV mints a code, the listener says it as
+  // words, the Skill binds the identity and queues a search, and the TV
+  // drains the command from the same relay.
+  const TV_DEVICE_ID = randomUUID();
+  const TV_QUERY = 'forest rain sounds';
+
+  console.log('\n6. PairTvIntent - TV code spoken as words');
+  const minted = await fetch(relayUrl('/v1/tv/pair'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Device-Id': TV_DEVICE_ID },
+    body: '{}',
+  })
+    .then(async response => ({ status: response.status, body: await response.json() }))
+    .catch(error => ({ status: 0, body: { error: String(error) } }));
+  const code = minted.body?.code;
+  console.log(`   TV asks for a code  ← ${minted.status}  ${code ?? JSON.stringify(minted.body)}`);
+  if (minted.status !== 200 || typeof code !== 'string') {
+    failures += 1;
+    console.error('   ! the TV could not mint a pairing code');
+  } else {
+    const spoken = spokenDigits(code);
+    console.log(`   listener says "${spoken}"`);
+    const { status, body } = await post(intentWithSlot('PairTvIntent', 'code', spoken));
+    const text = speech(body);
+    console.log(`   ← ${status}  🔊 ${text || '(no speech)'}`);
+    if (status !== 200 || !/paired/i.test(text)) {
+      failures += 1;
+      console.error('   ! a spoken code did not pair');
+    }
+
+    console.log('\n7. SearchOnTvIntent');
+    const searched = await post(intent('SearchOnTvIntent', TV_QUERY));
+    const searchSpeech = speech(searched.body);
+    console.log(`   ← ${searched.status}  🔊 ${searchSpeech || '(no speech)'}`);
+    if (searched.status !== 200 || !new RegExp(TV_QUERY, 'i').test(searchSpeech)) {
+      failures += 1;
+      console.error('   ! the search was not accepted');
+    }
+
+    console.log('\n8. the TV drains the command');
+    const polled = await fetch(relayUrl('/v1/tv/commands', { waitMs: '3000' }), {
+      headers: { 'X-Device-Id': TV_DEVICE_ID },
+    })
+      .then(async response => ({ status: response.status, body: await response.json() }))
+      .catch(error => ({ status: 0, body: { error: String(error) } }));
+    const command = polled.body?.command;
+    console.log(`   ← ${polled.status}  ${JSON.stringify(command ?? polled.body)}`);
+    if (polled.status !== 200 || command?.type !== 'search' || command?.query !== TV_QUERY) {
+      failures += 1;
+      console.error('   ! the TV did not receive the spoken search');
+    }
   }
 
   if (stopping) {

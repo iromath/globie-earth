@@ -501,3 +501,167 @@ pre.mono {
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* The phone board at /play/<code>. One column, big targets: it is read at
+   arm's length in a room where the television has the question. */
+#host-app[hidden],
+#play-app[hidden] { display: none; }
+/* One field and one button: give the name the full width a thumb can hit. */
+#play-join-form { grid-template-columns: 1fr; }
+#play-join-form button { width: 100%; padding: 0.7rem 1rem; }
+
+.play-clock {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-left: 0.4rem;
+}
+
+.play-clue {
+  margin: 0.9rem 0 0;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+/* The camera is a permission, not a setting: it sits above the card, states
+   its state in words, and shows the same small picture the TV draws. */
+.play-camera {
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.play-camera-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.play-camera-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.play-camera-btn {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.play-camera-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: rgba(111, 208, 140, 0.14);
+}
+
+.play-camera-preview {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  margin-top: 0.6rem;
+  border-radius: 8px;
+  background: #000;
+  transform: scaleX(-1);
+}
+
+.play-camera .hint {
+  margin: 0.5rem 0 0;
+}
+
+.play-tiles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}
+
+.play-tiles:empty {
+  display: none;
+}
+
+.play-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  font-size: 1rem;
+}
+
+.play-tile .second {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.play-tile[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: rgba(111, 208, 140, 0.14);
+}
+
+.play-chip {
+  margin: 0.9rem 0 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.play-chip.ok {
+  color: var(--accent);
+}
+
+.play-chip.err {
+  color: var(--error);
+}
+
+.play-board {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.play-board:empty {
+  display: none;
+}
+
+.play-board li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  background: var(--panel-2);
+  font-size: 0.9rem;
+}
+
+.play-board li.me {
+  border-color: rgba(111, 208, 140, 0.5);
+}
+
+.play-board .who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.play-board .score {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.play-board .tick {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+}

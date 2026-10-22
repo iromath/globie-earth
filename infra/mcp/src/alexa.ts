@@ -69,8 +69,22 @@ import { alexaCertExpiryGraceDays, alexaSkillId, alexaVerificationEnabled, verif
 import type { Caller } from './identity.js';
 import { resolveCaller } from './identity.js';
 import { buildServer } from './mcp-server.js';
-import { absoluteUrl, callProxy } from './proxy.js';
+import { absoluteUrl, callProxy, ProxyError } from './proxy.js';
 import { routeToTool } from './router.js';
+import { libraryTracks, newestReady, setTrackVisibility } from './studioLibrary.js';
+import type { LibraryTrack } from './studioLibrary.js';
+import { claimPairing, enqueueForAlexa, isPaired, pairingDigits, takeHandoff } from './tvCommands.js';
+import type { TvHandoff } from './tvCommands.js';
+import {
+  answerForAlexa,
+  currentGameForAlexa,
+  gameOpenForAlexa,
+  quitForAlexa,
+  skipForAlexa,
+  startGameForAlexa,
+} from './tvGame.js';
+import type { GameFailure, GameTurn } from './tvGame.js';
+import type { FeedList } from './tools/podcast.js';
 
 /**
  * Alexa speaks plain text up to 8000 characters and abandons a response after
@@ -103,19 +117,19 @@ const SPEECH_LIMIT = 1800;
 const TOOL_LATENCY_BUDGET_MS = 3000;
 
 const LAUNCH_SPEECH =
-  'Globie Earth is a regenerative agroforestry site in Isan, Thailand. Ask me about its trees ' +
-  'and animals, what the site is like right now, the cookbook, or planning a trip. ' +
-  'You can also ask me to generate sound, calming forest music that helps you relax, or ' +
-  'that guides meditation, mindfulness, or a podcast. What would you like to know?';
+  'Globie Earth is a regenerative agroforestry site in Isan, Thailand. Ask me what the site ' +
+  'is like right now, tell me about the trees and animals, the cookbook, or planning a trip. ' +
+  'From the home screen, say, ask Globie Earth to play a thirty minute guided meditation. ' +
+  'What would you like to know?';
 
 const HELP_SPEECH =
-  'You can say things like, ask Globie Earth about trees that fix paddy soil, ask ' +
-  'Globie Earth what the site is like, or ask Globie Earth to find tours in ' +
-  'Bangkok. What would you like to know?';
+  'You can say things like, tell me about trees that fix paddy soil, what the site is like ' +
+  'right now, search the TV for forest podcasts, or play a thirty minute guided meditation. ' +
+  'What would you like to know?';
 
 const FALLBACK_SPEECH =
-  'I did not catch a question in that. Try saying, ask Globie Earth about trees that ' +
-  'fix paddy soil, or, ask Globie Earth what the site is like.';
+  'I did not catch a question in that. Try saying, tell me about trees that fix paddy soil, ' +
+  'or, search the TV for forest podcasts.';
 
 const GOODBYE_SPEECH = 'Goodbye from the Globie Earth forest.';
 
@@ -179,6 +193,12 @@ interface AlexaEnvelope {
      * back here untouched. See nextMeditationStep.
      */
     token?: string;
+    /**
+     * How far into the stream the device was when it stopped or paused, on the
+     * two events that report it. This is the position a later "resume"
+     * restarts from - see notePlaybackEvent.
+     */
+    offsetInMilliseconds?: number;
   };
 }
 
@@ -230,6 +250,60 @@ const PENDING_ATTRIBUTE = 'globiePending';
 const PENDING_WEB_ATTRIBUTE = 'globiePendingWeb';
 
 /**
+ * Where a "publish my soundscape" turn leaves the track it is asking about.
+ *
+ * A bare "yes" carries no words of its own, and the sentence names no track
+ * either: the one meant is whatever was newest and finished when the question
+ * was asked. Keeping its id - rather than re-reading the library on the yes -
+ * publishes exactly the track the listener was told about, even if another
+ * render turned ready in between.
+ */
+const PENDING_PUBLISH_ATTRIBUTE = 'globiePendingPublish';
+
+/**
+ * Where a pairing turn leaves its question while it waits for the six digits.
+ *
+ * The model asks for the code itself (interactionModel.json, the PairTvIntent
+ * dialog), but the skill can still reach the intent with nothing in the slot:
+ * the session may already have been open, or the deployed model may be older
+ * than this build. The flag is what lets the next sentence - "zero four seven
+ * nine five one", which no sample covers on its own - be read as the answer
+ * instead of being routed as a fresh question.
+ */
+const PAIR_ATTRIBUTE = 'globiePairPending';
+
+/**
+ * What a pairing turn says when it has no code yet.
+ *
+ * It names the carrier phrase as well as asking the question: the digits on
+ * their own only reach the model through the PairTvIntent dialog, so a listener
+ * whose model predates it still has a sentence that matches a sample.
+ */
+const PAIR_CODE_QUESTION =
+  'What are the six digits shown on the TV? Say them one at a time, ' +
+  'for example: my TV code is zero four seven nine five one.';
+
+const PAIR_CODE_REPROMPT = 'Say the six digits on the TV, one at a time.';
+
+const PAIR_INVALID_SPEECH =
+  'That code is not valid. Check the six digits on the TV, then say them again.';
+
+/**
+ * Why a TV command could not run, said in a way that names the fix.
+ *
+ * The reply keeps the session open. Ending it here was the reason "pair my TV"
+ * never arrived: with no session the phrase is not addressed to this skill, so
+ * Alexa's own device-control intent claims it and answers that it cannot
+ * connect Bluetooth. The reprompt is the same phrase, which the model now
+ * matches without a code (PairTvIntent's codeless samples).
+ */
+const NOT_PAIRED_SPEECH =
+  'No TV is paired yet. Open Globie Earth on the TV, then say: pair my TV. ' +
+  'I will ask for the six digits it shows.';
+
+const NOT_PAIRED_REPROMPT = 'Say: pair my TV.';
+
+/**
  * Where a listener's "do not offer me the open web" answer is kept.
  *
  * Scoped to the session on purpose. This webhook is rebuilt from nothing on
@@ -255,7 +329,11 @@ const WEB_OFFER_ATTRIBUTE = 'globieWebOfferOff';
 const LAST_SUBJECT_ATTRIBUTE = 'globieLastSubject';
 
 /** A spoken answer, and keeps the session open for a follow-up. */
-function spoken(text: string, sessionAttributes: Record<string, unknown> = {}): AlexaSpeech {
+function spoken(
+  text: string,
+  sessionAttributes: Record<string, unknown> = {},
+  reprompt: string = REPROMPT_SPEECH,
+): AlexaSpeech {
   return {
     version: '1.0',
     // Always sent, even when empty: a reply that omits the key leaves the
@@ -264,7 +342,7 @@ function spoken(text: string, sessionAttributes: Record<string, unknown> = {}): 
     sessionAttributes,
     response: {
       outputSpeech: { type: 'PlainText', text },
-      reprompt: { outputSpeech: { type: 'PlainText', text: REPROMPT_SPEECH } },
+      reprompt: { outputSpeech: { type: 'PlainText', text: reprompt } },
       shouldEndSession: false,
     },
   };
@@ -273,6 +351,90 @@ function spoken(text: string, sessionAttributes: Record<string, unknown> = {}): 
 /** The end of the conversation. */
 function ending(text: string): AlexaSpeech {
   return { version: '1.0', response: { outputSpeech: { type: 'PlainText', text }, shouldEndSession: true } };
+}
+
+/**
+ * Where a game turn counts the utterances it could not map.
+ *
+ * A game keeps the session open, so a listener can answer with one word - but
+ * it also means the model sees everything they say next, and "the big one" is
+ * a reasonable thing to say that no sample covers. Repeating the question
+ * helps once; the second miss ends the session, because a reprompt that keeps
+ * failing is worse than asking the listener to start again (see the
+ * invocation note beside the model-miss fallback below).
+ */
+const GAME_MISS_ATTRIBUTE = 'globieGameMiss';
+const GAME_MISS_LIMIT = 2;
+
+const GAME_START_GUIDE =
+  'Open Guess Who on the TV, then say: ask Globie Earth to start the game.';
+
+const GAME_GUIDE_SPEECH =
+  'Say one, two or three to answer, next question to skip, or stop to end the game.';
+
+/** The numbers a listener may say instead of pressing 1, 2 or 3. */
+const OPTION_WORDS: Record<string, number> = {
+  '1': 1,
+  one: 1,
+  first: 1,
+  '2': 2,
+  two: 2,
+  second: 2,
+  '3': 3,
+  three: 3,
+  third: 3,
+};
+
+/**
+ * Which of the three answers was spoken.
+ *
+ * Read from the resolved slot value first ("the second one" arrives as its
+ * canonical value when the model resolves it), then from the raw words - so
+ * "number two" works even when the slot type did not match it.
+ */
+function optionNumberFrom(envelope: AlexaEnvelope): number | null {
+  const slot = envelope.request?.intent?.slots?.choice;
+  const resolved = slot?.resolutions?.resolutionsPerAuthority?.[0]?.values?.[0]?.value?.name;
+  const raw = (resolved ?? slot?.value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  for (const word of raw.split(/[^a-z0-9]+/)) {
+    const number = OPTION_WORDS[word];
+    if (number) return number;
+  }
+  return null;
+}
+
+/** Why a game turn could not happen, said in a way that names the fix. */
+function gameFailureReply(reason: GameFailure, envelope: AlexaEnvelope): AlexaSpeech {
+  if (reason === 'not_paired') {
+    return spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT);
+  }
+  if (reason === 'no_deck') {
+    return ending(`I cannot see a quiz on the TV. ${GAME_START_GUIDE}`);
+  }
+  if (reason === 'no_session') {
+    return ending(`No game is running. ${GAME_START_GUIDE}`);
+  }
+  if (reason === 'already_answered') {
+    return spoken('That one is already answered. Say next question to move on.', {}, 'Say next question.');
+  }
+  return spoken('I did not catch which one. Say one, two or three.', {}, 'Say one, two or three.');
+}
+
+/**
+ * One turn of the game, with the session left open.
+ *
+ * The reprompt repeats the question rather than asking what else the listener
+ * wants, because inside a game the only useful next sentence is an answer.
+ * A finished game ends the session instead: there is nothing left to answer,
+ * and an open session is only worth its cost while questions remain.
+ */
+function gameTurnReply(turn: GameTurn, envelope: AlexaEnvelope): AlexaSpeech {
+  if (!turn.ok) return gameFailureReply(turn.reason, envelope);
+  if (turn.finished) return ending(turn.speech);
+  // Empty attributes on purpose: a game turn abandons any pending go-ahead
+  // question from before the game started, and resets the miss counter.
+  return spoken(turn.speech, {}, turn.reprompt);
 }
 
 /**
@@ -298,12 +460,14 @@ interface AlexaDirective {
 }
 
 /**
- * Starts a stream from the beginning, replacing whatever is already playing.
+ * Starts a stream, replacing whatever is already playing.
  *
  * `token` is opaque to Alexa and echoed back on every playback event, so the
- * track id is what lets a later event name this exact stream.
+ * track id is what lets a later event name this exact stream. `offsetMs` is
+ * where to pick the file up: zero for a stream starting from its beginning, and
+ * the position the device reported when this is a resume (see resumeStream).
  */
-function playing(url: string, token: string): AlexaDirective {
+function playing(url: string, token: string, offsetMs = 0): AlexaDirective {
   return {
     version: '1.0',
     response: {
@@ -311,7 +475,7 @@ function playing(url: string, token: string): AlexaDirective {
         {
           type: 'AudioPlayer.Play',
           playBehavior: 'REPLACE_ALL',
-          audioItem: { stream: { token, url, offsetInMilliseconds: 0 } },
+          audioItem: { stream: { token, url, offsetInMilliseconds: offsetMs } },
         },
       ],
       // Required for audio: leaving this false would send the stream to the
@@ -384,6 +548,140 @@ function stopping(): AlexaDirective {
     version: '1.0',
     response: { directives: [{ type: 'AudioPlayer.Stop' }], shouldEndSession: true },
   };
+}
+
+/**
+ * The stream a device last started, so "resume" has somewhere to go back to.
+ *
+ * No session can hold this. Every reply that starts audio ends the session
+ * (see playing), and "pause" then arrives as its own intent on a fresh request
+ * that carries no memory of what was playing - and no position either: only the
+ * two events the pause raises report one (PlaybackStopped, PlaybackPaused). So
+ * the position has to be kept here, against the caller, which is also what lets
+ * "resume" replay a podcast or a meditation rather than guess at a soundscape.
+ *
+ * Bounded the way tvCommands.ts bounds its pairings: an entry is no use after a
+ * night's sleep, and the map must not grow by one row for every listener who
+ * ever pressed play. Re-inserting on every write keeps insertion order the
+ * recency order the size cap trims by.
+ */
+interface LastStream {
+  /** What the device is playing now. */
+  token: string;
+  url: string;
+  /** Where it stopped, from the last PlaybackStopped or PlaybackPaused. */
+  offsetMs: number;
+  /**
+   * A stream queued behind it (ENQUEUE) and not started yet. Kept apart from
+   * the field above because the device is still playing the current one until
+   * PlaybackStarted names the queued token - promoting it any earlier would
+   * make a pause mid-episode resume the next episode instead.
+   */
+  queued?: { token: string; url: string };
+  at: number;
+}
+
+const STREAM_TTL_MS = 12 * 60 * 60 * 1000;
+const STREAM_CAP = 500;
+const lastStreams = new Map<string, LastStream>();
+
+/** Drops entries past their TTL, then the oldest ones past the cap. */
+function pruneStreams(now: number): void {
+  for (const [deviceId, entry] of lastStreams) {
+    if (now - entry.at > STREAM_TTL_MS) lastStreams.delete(deviceId);
+  }
+  for (const deviceId of lastStreams.keys()) {
+    if (lastStreams.size <= STREAM_CAP) break;
+    lastStreams.delete(deviceId);
+  }
+}
+
+/** Remembers one stream this device was told to play. */
+function noteStream(
+  deviceId: string,
+  token: string,
+  url: string,
+  offsetMs: number,
+  enqueue: boolean,
+): void {
+  const now = Date.now();
+  const previous = lastStreams.get(deviceId);
+  // Deleted and re-set rather than overwritten: a Map keeps the position of a
+  // key it updates, and the cap above trims in that order.
+  lastStreams.delete(deviceId);
+  if (enqueue && previous) {
+    lastStreams.set(deviceId, { ...previous, queued: { token, url }, at: now });
+  } else {
+    lastStreams.set(deviceId, { token, url, offsetMs, at: now });
+  }
+  pruneStreams(now);
+}
+
+/**
+ * Notes the stream a Play directive carries, if the reply carries one.
+ *
+ * Called wherever a stream is handed to the device, so "resume" does not have
+ * to know which of the play paths produced it. A reply with no Play directive
+ * (speech, or Stop) leaves the memory untouched: saying "pause" must not erase
+ * what it is meant to resume.
+ */
+function rememberStream(deviceId: string, reply: AlexaSpeech | AlexaDirective): void {
+  if (!('directives' in reply.response)) return;
+  for (const directive of reply.response.directives ?? []) {
+    if (directive.type !== 'AudioPlayer.Play') continue;
+    const audioItem = isRecord(directive.audioItem) ? directive.audioItem : {};
+    const stream = isRecord(audioItem.stream) ? audioItem.stream : {};
+    const token = typeof stream.token === 'string' ? stream.token : null;
+    const url = typeof stream.url === 'string' ? stream.url : null;
+    if (!token || !url) continue;
+    const offsetMs =
+      typeof stream.offsetInMilliseconds === 'number' ? stream.offsetInMilliseconds : 0;
+    noteStream(deviceId, token, url, offsetMs, directive.playBehavior === 'ENQUEUE');
+  }
+}
+
+/** Makes a queued stream the current one, once the device says it started it. */
+function startStream(deviceId: string, token: string | undefined): void {
+  const entry = lastStreams.get(deviceId);
+  if (!entry?.queued || !token || entry.queued.token !== token) return;
+  lastStreams.delete(deviceId);
+  lastStreams.set(deviceId, {
+    token: entry.queued.token,
+    url: entry.queued.url,
+    offsetMs: 0,
+    at: Date.now(),
+  });
+}
+
+/**
+ * Keeps the position the device stopped or paused at.
+ *
+ * Only an event for the stream being tracked is taken: an event for a stream
+ * this map has already replaced would otherwise move the resume point into a
+ * file that is no longer the one to replay.
+ */
+function notePlaybackEvent(
+  deviceId: string,
+  token: string | undefined,
+  offsetMs: number | undefined,
+): void {
+  const entry = lastStreams.get(deviceId);
+  if (!entry || !token || entry.token !== token) return;
+  if (typeof offsetMs === 'number' && Number.isFinite(offsetMs) && offsetMs >= 0) {
+    entry.offsetMs = offsetMs;
+  }
+  entry.at = Date.now();
+}
+
+/** The stream this device last played, or null once it has aged out. */
+function lastStreamFor(deviceId: string): LastStream | null {
+  const entry = lastStreams.get(deviceId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > STREAM_TTL_MS) {
+    lastStreams.delete(deviceId);
+    return null;
+  }
+  return entry;
 }
 
 /** What GET /v1/studio/library answers with (infra/studio/src/server.ts). */
@@ -708,10 +1006,16 @@ interface AnswerOutcome {
  * tool then runs is the second pass over that sentence with `confirmed` set
  * (confirmReply) - nothing about the call itself is skipped.
  */
-const CONFIRMATION_REQUIRED = new Set<string>(['generate_soundscape']);
+const CONFIRMATION_REQUIRED = new Set<string>(['generate_soundscape', 'publish_soundscape']);
 
-/** The question an unconfirmed spend-gated call is turned back into. */
-function goAheadQuestion(toolArguments: Record<string, unknown>): string {
+/** The question an unconfirmed state-changing call is turned back into. */
+function goAheadQuestion(tool: string, toolArguments: Record<string, unknown>): string {
+  if (tool === 'publish_soundscape') {
+    // The id the router may have chosen is not a title, and the track it names
+    // is resolved on the yes anyway (PENDING_PUBLISH_ATTRIBUTE), so the question
+    // stays about "that soundscape" rather than guessing a name.
+    return 'I can publish that soundscape to the Globie Earth public library. Shall I go ahead?';
+  }
   const title = typeof toolArguments.title === 'string' ? toolArguments.title.trim() : '';
   return title
     ? `I can make "${title}" for you. Shall I go ahead?`
@@ -841,7 +1145,7 @@ async function answer(
     // the tool.
     if (!options.confirmed && CONFIRMATION_REQUIRED.has(tool)) {
       log.info({ tool }, 'alexa: holding a spend-gated call for a go-ahead');
-      return { speech: goAheadQuestion(toolArguments), awaitingGoAhead: true };
+      return { speech: goAheadQuestion(tool, toolArguments), awaitingGoAhead: true };
     }
 
     const result = await client.callTool({ name: tool, arguments: toolArguments });
@@ -892,6 +1196,35 @@ function pendingUtterance(envelope: AlexaEnvelope): string | null {
 function pendingWebQuery(envelope: AlexaEnvelope): string | null {
   const value = envelope.session?.attributes?.[PENDING_WEB_ATTRIBUTE];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** The track a pending publish question is about, or null. */
+function pendingPublishTrack(envelope: AlexaEnvelope): { id: string; title: string } | null {
+  const value = envelope.session?.attributes?.[PENDING_PUBLISH_ATTRIBUTE];
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  if (!id) return null;
+  return { id, title: typeof value.title === 'string' ? value.title.trim() : '' };
+}
+
+/**
+ * The six digits a pending pairing turn is waiting for, or null.
+ *
+ * Read before routing because the question is asked before the model knows
+ * what the answer is: the listener's next sentence is a string of numbers,
+ * which arrives as whatever intent the model makes of it - often the fallback
+ * one, and with the words in a slot this file does not otherwise read. Only a
+ * complete six-digit reading is claimed here, so an unrelated sentence still
+ * routes normally instead of being rejected as a bad code.
+ */
+function pendingPairDigits(envelope: AlexaEnvelope): string | null {
+  if (envelope.session?.attributes?.[PAIR_ATTRIBUTE] !== true) return null;
+  const slots = envelope.request?.intent?.slots ?? {};
+  const said = [slots.query?.value, slots.code?.value]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  const digits = pairingDigits(said);
+  return digits.length === 6 ? digits : null;
 }
 
 /** Whether this session has asked not to be offered the open web (WEB_OFFER_ATTRIBUTE). */
@@ -1021,6 +1354,7 @@ async function confirmReply(
 ): Promise<AlexaSpeech> {
   const pending = pendingUtterance(envelope);
   const pendingWeb = pendingWebQuery(envelope);
+  const pendingPublish = pendingPublishTrack(envelope);
 
   // Neither reply carries the attribute forward: the question has been answered
   // either way, and a stale pending sentence must not be reachable later.
@@ -1039,6 +1373,13 @@ async function confirmReply(
   if (pendingWeb) {
     const answered = await answer(pendingWeb, caller, log, { tool: 'search_web' });
     return spoken(answered.speech, keepAttributes(envelope));
+  }
+
+  // A publish question names its track by id rather than by a sentence, so the
+  // yes runs the one call the question was about - no routing, nothing to
+  // re-read that might have changed since the listener was told its name.
+  if (pendingPublish) {
+    return spoken(await publishTrack(caller, log, pendingPublish), keepAttributes(envelope));
   }
 
   if (!pending) {
@@ -1085,11 +1426,114 @@ async function playLatestSoundscape(
         carry,
       );
     }
-    return playing(absoluteUrl('studio', ready.audioUrl) ?? ready.audioUrl, ready.id);
+    const directive = playing(absoluteUrl('studio', ready.audioUrl) ?? ready.audioUrl, ready.id);
+    rememberStream(caller.deviceId, directive);
+    return directive;
   } catch (error) {
     log.error({ err: error }, 'alexa: could not play the soundscape');
     return spoken('I could not start your soundscape just now. Please try again in a moment.', carry);
   }
+}
+
+/**
+ * Publishes one finished soundscape and says how it went.
+ *
+ * The studio's own refusals each mean something a listener can act on, so they
+ * are answered in their own words rather than as a generic failure: an
+ * unfinished render (409), the per-device published cap (429), and the publish
+ * filter rejecting the title or style (422).
+ */
+async function publishTrack(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  track: { id: string; title: string },
+): Promise<string> {
+  try {
+    const published = await setTrackVisibility(caller, track.id, 'public');
+    const name = published.title?.trim() || track.title || 'Your soundscape';
+    return (
+      `"${name}" is now public in the Globie Earth sound library. ` +
+      'Anyone can ask me to play the public library and hear it.'
+    );
+  } catch (error) {
+    log.error({ err: error }, 'alexa: could not publish the soundscape');
+    const status = error instanceof ProxyError ? error.status : 0;
+    const message = error instanceof Error ? error.message : '';
+    if (status === 409) {
+      return 'That soundscape is still rendering. Ask me to publish it again once it is ready.';
+    }
+    if (status === 429) {
+      return (
+        'You have reached the number of public soundscapes one listener can publish. ' +
+        'Unpublish one before adding another.'
+      );
+    }
+    if (status === 422 && message) return `I could not publish it: ${message}`;
+    return 'I could not publish your soundscape just now. Please try again in a moment.';
+  }
+}
+
+/**
+ * Asks whether to publish the newest finished soundscape.
+ *
+ * Deterministic rather than routed: the listener already named the action, and
+ * the only unknown is which track - the newest ready one in the same
+ * device-scoped library "play my soundscape" reads. The id is kept in
+ * PENDING_PUBLISH_ATTRIBUTE so the yes publishes exactly the track named here,
+ * and a partial sentence never reaches the public catalogue unreviewed.
+ */
+async function askToPublish(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  envelope: AlexaEnvelope,
+): Promise<AlexaSpeech> {
+  let ready: LibraryTrack | null;
+  try {
+    ready = newestReady(await libraryTracks(caller));
+  } catch (error) {
+    log.error({ err: error }, 'alexa: could not read the soundscape library');
+    return spoken(
+      'I could not reach your soundscapes just now. Please try again in a moment.',
+      keepAttributes(envelope),
+    );
+  }
+  if (!ready) {
+    return spoken(
+      'You have no finished soundscape to publish yet. Ask me to make one first, then ask me ' +
+        'to publish it.',
+      keepAttributes(envelope),
+    );
+  }
+  const name = ready.title?.trim() || 'your soundscape';
+  return spoken(
+    `I can publish "${name}" to the Globie Earth public library, where anyone can hear it. ` +
+      'Shall I go ahead?',
+    keepAttributes(envelope, {
+      [PENDING_PUBLISH_ATTRIBUTE]: { id: ready.id, title: ready.title },
+    }),
+  );
+}
+
+/**
+ * Picks the last stream up where the listener paused it.
+ *
+ * Nothing in the request says what was playing or how far in it had got - the
+ * pause closed the session, and only the events it raised carried a position -
+ * so the answer comes from lastStreams. With nothing remembered (a fresh
+ * process, or a listener who has not played anything for half a day) the newest
+ * soundscape is the fallback, which is all this intent could do before it could
+ * tell the two cases apart.
+ */
+async function resumeStream(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  carry: Record<string, unknown>,
+): Promise<AlexaSpeech | AlexaDirective> {
+  const stored = lastStreamFor(caller.deviceId);
+  if (!stored) return playLatestSoundscape(caller, log, carry);
+  const directive = playing(stored.url, stored.token, stored.offsetMs);
+  rememberStream(caller.deviceId, directive);
+  return directive;
 }
 
 /**
@@ -1115,11 +1559,13 @@ async function playPublicTrack(
         carry,
       );
     }
-    return announcing(
+    const directive = announcing(
       `Here is ${ready.title}, from the public library.`,
       absoluteUrl('studio', ready.audioUrl) ?? ready.audioUrl,
       ready.id,
     );
+    rememberStream(caller.deviceId, directive);
+    return directive;
   } catch (error) {
     log.error({ err: error }, 'alexa: could not play from the public library');
     return spoken(
@@ -1142,26 +1588,23 @@ async function playPublicTrack(
 function playMeditation(
   minutes: number | null,
   carry: Record<string, unknown>,
+  deviceId: string,
 ): AlexaSpeech | AlexaDirective {
   const guide = minutes ? GUIDES[minutes] : undefined;
   const bed = randomBed();
-  if (guide) {
-    const name = `${guide.name}-${bed.id}`;
-    return announcing(
-      `Here is your ${guide.minutes} minute guided meditation, with ${bed.label} in the background. Settle in, and follow the voice.`,
-      `${VOICE_BASE_URL}/voice/guides/${name}.mp3`,
-      `guide:${name}`,
-    );
-  }
   // The grounding lesson is mixed into one file too, for the same reason the
   // long guides are: a bed carried across a chain of separate streams would
   // restart at every line.
-  const name = `${SHORT_GUIDE}-${bed.id}`;
-  return announcing(
-    `Here is a grounding meditation, with ${bed.label} in the background. Settle in and follow the voice.`,
+  const name = guide ? `${guide.name}-${bed.id}` : `${SHORT_GUIDE}-${bed.id}`;
+  const reply = announcing(
+    guide
+      ? `Here is your ${guide.minutes} minute guided meditation, with ${bed.label} in the background. Settle in, and follow the voice.`
+      : `Here is a grounding meditation, with ${bed.label} in the background. Settle in and follow the voice.`,
     `${VOICE_BASE_URL}/voice/guides/${name}.mp3`,
     `guide:${name}`,
   );
+  rememberStream(deviceId, reply);
+  return reply;
 }
 
 /** One episode, as the list route reports it. */
@@ -1177,6 +1620,16 @@ type PodcastFeed = NonNullable<PodcastFeeds['feeds']>[number];
  * well as the queue depth.
  */
 const PODCAST_QUEUE = 10;
+
+/**
+ * How many shows on one shelf are tried before the shelf is given up on.
+ *
+ * Each attempt costs an episode lookup and a playability probe inside Alexa's
+ * eight-second budget, so a shelf is not walked end to end: the first few are
+ * enough to get past a feed whose host has started refusing requests, which is
+ * the failure the probe exists for.
+ */
+const PODCAST_SHELF_TRIES = 3;
 
 /**
  * The token that names one episode: its show, and its place in that show.
@@ -1255,26 +1708,66 @@ async function podcastEpisodes(
 }
 
 /**
- * The freshest playable show on one shelf, or undefined if that shelf has
- * nothing to offer - including when it refuses to answer at all.
+ * The playable shows on one shelf, freshest first - empty when the shelf has
+ * nothing to offer, including when it refuses to answer at all.
  *
  * A refusal is absorbed rather than raised because a shelf is only ever one
  * attempt at a theme: `bytheme` answers 400 for a theme its list does not
  * carry (`{ error: "bytheme needs a theme from /v1/podcast/themes." }`), which
  * is a miss to fall past - the caller's next shelf may still answer - not a
  * reason to abandon the turn.
+ *
+ * The whole list rather than its first entry, because the freshest show is not
+ * always the one that plays: a publisher that starts refusing requests moves
+ * the turn to the next show on the same shelf (see playPodcast).
  */
-async function freshestShow(
+async function shelfShows(
   shelf: string,
   caller: Caller,
   log: FastifyInstance['log'],
-): Promise<PodcastFeed | undefined> {
+): Promise<PodcastFeed[]> {
   try {
     const { feeds } = await callProxy<PodcastFeeds>('podcast', shelf, caller);
-    return (feeds ?? []).find((feed) => feed.newestEnclosureUrl);
+    return (feeds ?? []).filter((feed) => feed.newestEnclosureUrl);
   } catch (error) {
     log.warn({ err: error, shelf }, 'alexa: a podcast shelf did not answer');
-    return undefined;
+    return [];
+  }
+}
+
+/** How long one playability probe may take before its host is given up on. */
+const PROBE_TIMEOUT_MS = 2500;
+
+/**
+ * Whether a publisher's file will actually play on the device.
+ *
+ * Alexa fetches the stream itself, with none of the headers this server would
+ * send, and some hosts refuse that fetch: dts.podtrac.com and api.substack.com
+ * answer 403 to a request with no user agent, for instance. A Play directive
+ * naming such a URL is accepted and then fails silently - the listener hears
+ * the skill go quiet instead of hearing why - so the URL is tried here first
+ * with a one-byte range request, the cheapest way to learn what the device's
+ * own fetch would run into.
+ *
+ * Only a definite refusal counts against the URL: a 2xx that is not audio, or
+ * any other status. A probe that cannot finish (a slow host, a network the
+ * server cannot see but the device can) is not evidence against the stream, so
+ * it is allowed through rather than costing the listener a show that would
+ * have played.
+ */
+async function playable(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      headers: { Range: 'bytes=0-0' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    // At most one byte came back; cancelling the body releases the connection.
+    await response.body?.cancel().catch(() => {});
+    if (response.status !== 200 && response.status !== 206) return false;
+    return (response.headers.get('content-type') ?? '').toLowerCase().startsWith('audio/');
+  } catch {
+    return true;
   }
 }
 
@@ -1291,6 +1784,12 @@ async function freshestShow(
  * second, so a word the theme list does not carry still finds its shows rather
  * than ending the turn; only when neither shelf answers is the caller told
  * there is no such podcast.
+ *
+ * Each candidate URL is probed before it is announced (playable). A show whose
+ * file fails is passed over for the next show on the same shelf, and a shelf
+ * whose shows all fail hands the turn to the next shelf; only when nothing
+ * anywhere holds a playable file does the listener hear that, rather than a
+ * Play directive the device would fail in silence.
  */
 async function playPodcast(
   caller: Caller,
@@ -1300,30 +1799,36 @@ async function playPodcast(
 ): Promise<AlexaSpeech | AlexaDirective> {
   const shelves = theme
     ? [
-        `/v1/podcast/bytheme?theme=${encodeURIComponent(theme)}&max=5`,
-        `/v1/podcast/search?q=${encodeURIComponent(theme)}&max=5`,
+        `/v1/podcast/bytheme?theme=${encodeURIComponent(theme)}&max=${PODCAST_SHELF_TRIES}`,
+        `/v1/podcast/search?q=${encodeURIComponent(theme)}&max=${PODCAST_SHELF_TRIES}`,
       ]
-    : ['/v1/podcast/search?q=forest&max=5'];
+    : [`/v1/podcast/search?q=forest&max=${PODCAST_SHELF_TRIES}`];
 
   try {
-    let show: PodcastFeed | undefined;
     for (const shelf of shelves) {
-      show = await freshestShow(shelf, caller, log);
-      if (show) break;
+      const shows = (await shelfShows(shelf, caller, log)).slice(0, PODCAST_SHELF_TRIES);
+      for (const show of shows) {
+        const episodes = await podcastEpisodes(show.id, caller, log);
+        const url = episodes[0]?.enclosureUrl ?? show.newestEnclosureUrl;
+        if (!url) continue;
+        if (!(await playable(url))) {
+          log.warn({ feedId: show.id, url }, 'alexa: a podcast episode refused the playability probe');
+          continue;
+        }
+        const reply = announcing(
+          `Here is the latest episode of ${show.title}.`,
+          url,
+          podcastToken(show.id, 0),
+        );
+        rememberStream(caller.deviceId, reply);
+        return reply;
+      }
     }
-    if (!show?.newestEnclosureUrl) {
-      return spoken(
-        theme
-          ? `I could not find a ${theme.replace(/-/g, ' ')} podcast to play just now.`
-          : 'I could not find a podcast episode to play just now.',
-        carry,
-      );
-    }
-    const episodes = await podcastEpisodes(show.id, caller, log);
-    return announcing(
-      `Here is the latest episode of ${show.title}.`,
-      episodes[0]?.enclosureUrl ?? show.newestEnclosureUrl,
-      podcastToken(show.id, 0),
+    return spoken(
+      theme
+        ? `I could not find a playable ${theme.replace(/-/g, ' ')} podcast just now.`
+        : 'I could not find a playable podcast episode just now.',
+      carry,
     );
   } catch (error) {
     log.error({ err: error }, 'alexa: could not play a podcast');
@@ -1332,6 +1837,65 @@ async function playPodcast(
       carry,
     );
   }
+}
+
+/**
+ * Plays exactly what the television could not.
+ *
+ * Vega builds without an audio sink (the virtual device is the common one)
+ * fail every play with MEDIA_ERR_SRC_NOT_SUPPORTED. The TV parks the item it
+ * was opening in tvCommands.ts and shows a carrier phrase; this is the other
+ * half of that hand-off - the same episode, not the freshest one playPodcast
+ * would otherwise choose.
+ */
+async function playHandoffPodcast(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  carry: Record<string, unknown>,
+  feedId: number,
+  episodeId: number,
+): Promise<AlexaSpeech | AlexaDirective> {
+  const episodes = await podcastEpisodes(feedId, caller, log);
+  const index = episodes.findIndex((episode) => episode.id === episodeId);
+  const episode = index >= 0 ? episodes[index] : episodes[0];
+  if (!episode?.enclosureUrl) {
+    return spoken(
+      'That episode is no longer in the show’s feed. Ask me to play a podcast instead.',
+      carry,
+    );
+  }
+  if (!(await playable(episode.enclosureUrl))) {
+    return spoken(
+      'That episode’s host is not answering just now. Ask me to play a podcast instead.',
+      carry,
+    );
+  }
+  const reply = announcing(
+    `Here is ${episode.title}, continuing from the television.`,
+    episode.enclosureUrl,
+    podcastToken(feedId, index >= 0 ? index : 0),
+  );
+  rememberStream(caller.deviceId, reply);
+  return reply;
+}
+
+/**
+ * The audio the TV handed over, whatever kind it was.
+ *
+ * Used by AMAZON.ResumeIntent, which has no catalogue of its own: after a TV
+ * says "no sound, ask Alexa", the natural next utterance is "resume", and it
+ * should continue that lesson rather than fall through to a soundscape.
+ */
+async function playHandoff(
+  caller: Caller,
+  log: FastifyInstance['log'],
+  carry: Record<string, unknown>,
+  handoff: TvHandoff,
+): Promise<AlexaSpeech | AlexaDirective> {
+  if (handoff.type === 'meditation') {
+    return playMeditation(handoff.minutes, carry, caller.deviceId);
+  }
+  return playHandoffPodcast(caller, log, carry, handoff.feedId, handoff.episodeId);
 }
 
 /**
@@ -1355,10 +1919,43 @@ async function playNextEpisode(
   const episodes = await podcastEpisodes(playing.feedId, caller, log);
   const next = episodes[playing.index + 1];
   if (!next) return spoken('That is the last episode I have for this show.', carry);
-  return announcing(
+  const reply = announcing(
     'Here is the next episode.',
     next.enclosureUrl,
     podcastToken(playing.feedId, playing.index + 1),
+  );
+  rememberStream(caller.deviceId, reply);
+  return reply;
+}
+
+/**
+ * The episode after the one that is about to finish, or null when there is
+ * none - and null for every stream that is not a podcast.
+ *
+ * This answers PlaybackNearlyFinished, the event that arrives before the
+ * current file runs out, so the next episode is appended silently instead of
+ * following a pause. The device names what is playing in the token, so the
+ * neighbour is found without a queue; the last episode of a show returns null
+ * and the reply carries no directive, which ends playback cleanly.
+ *
+ * The caller is nullable because playback events need not carry the identity
+ * a request does; without one the episode list cannot be read, and staying
+ * quiet is the right answer rather than starting an unrelated stream.
+ */
+async function nextPodcastStep(
+  caller: Caller | null,
+  token: string | undefined,
+  log: FastifyInstance['log'],
+): Promise<AlexaDirective | null> {
+  const played = parsePodcastToken(token);
+  if (!played || !caller) return null;
+  const episodes = await podcastEpisodes(played.feedId, caller, log);
+  const next = episodes[played.index + 1];
+  if (!next) return null;
+  return playingNext(
+    next.enclosureUrl,
+    podcastToken(played.feedId, played.index + 1),
+    token as string,
   );
 }
 
@@ -1431,9 +2028,28 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     // its first voice line. Every other event is logged and left unanswered.
     if (type?.startsWith('AudioPlayer.')) {
       request.log.info({ type }, 'alexa: playback event');
+      const token = envelope.request?.token;
+      const caller = callerFor(envelope);
+      // The player's own report is the only place a paused stream's position is
+      // ever stated, so it is what a later "resume" replays from; and a queued
+      // track becomes the one to resume only once the device says it started.
+      if (caller) {
+        if (type === 'AudioPlayer.PlaybackStarted') startStream(caller.deviceId, token);
+        if (type === 'AudioPlayer.PlaybackStopped' || type === 'AudioPlayer.PlaybackPaused') {
+          notePlaybackEvent(caller.deviceId, token, envelope.request?.offsetInMilliseconds);
+        }
+      }
       if (type === 'AudioPlayer.PlaybackNearlyFinished') {
-        const next = nextMeditationStep(envelope.request?.token);
-        if (next) return reply.send(next);
+        // Two token vocabularies have a track behind them: a meditation lesson
+        // names its next line, and a podcast episode names its neighbour in the
+        // show. Everything else - a guide, a soundscape - is one file with
+        // nothing to chain, and its token parses as neither.
+        const next =
+          nextMeditationStep(token) ?? (await nextPodcastStep(caller, token, request.log));
+        if (next) {
+          if (caller) rememberStream(caller.deviceId, next);
+          return reply.send(next);
+        }
       }
       return reply.send({ version: '1.0', response: {} });
     }
@@ -1449,6 +2065,15 @@ export function registerAlexaRoute(app: FastifyInstance): void {
 
     const intent = envelope.request?.intent?.name ?? '';
     if (intent === 'AMAZON.StopIntent' || intent === 'AMAZON.CancelIntent') {
+      // During a game "stop" has to close the game as well as the conversation:
+      // the server side would otherwise keep judging a screen nobody is
+      // playing, and the TV would keep mirroring a score that can no longer be
+      // answered. quitForAlexa also tells the screen to leave the game.
+      const caller = callerFor(envelope);
+      if (caller && (await gameOpenForAlexa(caller))) {
+        await quitForAlexa(caller);
+        return reply.send(ending(`Ending the game. ${GOODBYE_SPEECH}`));
+      }
       return reply.send(ending(GOODBYE_SPEECH));
     }
     if (intent === 'AMAZON.PauseIntent') {
@@ -1459,6 +2084,32 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     }
     if (intent === 'AMAZON.HelpIntent') {
       return reply.send(spoken(HELP_SPEECH, keepAttributes(envelope)));
+    }
+    // A pairing turn asks for the six digits and keeps the session open (see
+    // the PairTvIntent branch). The answer is claimed here, before any routing,
+    // because a string of numbers carries none of the words an intent's samples
+    // are built from. A code that does not verify asks again rather than
+    // dropping the listener back to the invocation - the whole reason the reply
+    // that opened this question was not `ending`.
+    const pendingPairCode = pendingPairDigits(envelope);
+    if (pendingPairCode) {
+      const pairCaller = callerFor(envelope);
+      if (!pairCaller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot pair a TV.', keepAttributes(envelope)),
+        );
+      }
+      if ((await claimPairing(pendingPairCode, pairCaller)).paired) {
+        return reply.send(ending('Paired. You can now say: search the TV for forest podcasts.'));
+      }
+      return reply.send(
+        spoken(
+          PAIR_INVALID_SPEECH,
+          keepAttributes(envelope, { [PAIR_ATTRIBUTE]: true }),
+          PAIR_CODE_REPROMPT,
+        ),
+      );
     }
     // The open-web offer is useful until it is not, so the listener can turn it
     // off in one sentence. The flag rides the session attributes because that is
@@ -1485,6 +2136,19 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       }
       return reply.send(await confirmReply(intent, envelope, caller, request.log));
     }
+    if (intent === 'PublishSoundscapeIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(
+          spoken(
+            'I could not tell who is asking, so I cannot publish anything.',
+            keepAttributes(envelope),
+          ),
+        );
+      }
+      return reply.send(await askToPublish(caller, request.log, envelope));
+    }
     if (intent === 'PlaySoundscapeIntent' || intent === 'AMAZON.ResumeIntent') {
       const caller = callerFor(envelope);
       if (!caller) {
@@ -1492,6 +2156,22 @@ export function registerAlexaRoute(app: FastifyInstance): void {
         return reply.send(
           spoken('I could not tell who is asking, so I cannot find your music.', keepAttributes(envelope)),
         );
+      }
+      // "Resume" and "play the soundscape" used to share one answer, which
+      // meant a listener who paused a podcast or a meditation was handed a
+      // soundscape instead. Resume now goes back to what was playing; the
+      // soundscape is only its fallback when nothing is remembered.
+      if (intent === 'AMAZON.ResumeIntent') {
+        // A TV that could not open its audio output parks what it was trying
+        // to play, and "resume" is the shortest thing to say next. Nothing
+        // else in this server knows about that item, so it is read first.
+        const handoff = takeHandoff(caller.deviceId);
+        if (handoff) {
+          return reply.send(
+            await playHandoff(caller, request.log, keepAttributes(envelope), handoff),
+          );
+        }
+        return reply.send(await resumeStream(caller, request.log, keepAttributes(envelope)));
       }
       return reply.send(await playLatestSoundscape(caller, request.log, keepAttributes(envelope)));
     }
@@ -1510,6 +2190,13 @@ export function registerAlexaRoute(app: FastifyInstance): void {
         return reply.send(
           spoken('I could not tell who is asking, so I cannot change the episode.', keepAttributes(envelope)),
         );
+      }
+      // Inside a game "next" means the next question. The check comes first
+      // because a quiz has no stream for the episode path to read, and a
+      // listener who says "next" mid-question must not be told there is
+      // nothing playing.
+      if (await gameOpenForAlexa(caller)) {
+        return reply.send(gameTurnReply(await skipForAlexa(caller), envelope));
       }
       return reply.send(
         await playNextEpisode(
@@ -1536,6 +2223,21 @@ export function registerAlexaRoute(app: FastifyInstance): void {
         );
       }
       if (intent === 'PlayPodcastIntent') {
+        // The TV may have parked one exact episode it could not open. Asking
+        // for a podcast from the room where that TV sits should continue it,
+        // not pick a different show from the shelf.
+        const handoff = takeHandoff(caller.deviceId, 'podcast');
+        if (handoff?.type === 'podcast') {
+          return reply.send(
+            await playHandoffPodcast(
+              caller,
+              request.log,
+              keepAttributes(envelope),
+              handoff.feedId,
+              handoff.episodeId,
+            ),
+          );
+        }
         return reply.send(
           await playPodcast(caller, request.log, keepAttributes(envelope), podcastThemeFrom(envelope.request)),
         );
@@ -1543,9 +2245,298 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       if (intent === 'PlayPublicTrackIntent') {
         return reply.send(await playPublicTrack(caller, request.log, keepAttributes(envelope)));
       }
+      // Same for a lesson: the TV parked the one it was opening, so the spoken
+      // request repeats that session instead of drawing a fresh one. The
+      // parked duration fills in only when the utterance named none - "play a
+      // guided meditation" should honour the thirty minutes on the screen.
+      const handoff = takeHandoff(caller.deviceId, 'meditation');
+      const minutes =
+        guideMinutesFrom(envelope.request) ??
+        (handoff?.type === 'meditation' ? handoff.minutes : null);
       return reply.send(
-        playMeditation(guideMinutesFrom(envelope.request), keepAttributes(envelope)),
+        playMeditation(
+          minutes,
+          keepAttributes(envelope),
+          caller.deviceId,
+        ),
       );
+    }
+
+    // The TV relay (tvCommands.ts). A Skill cannot navigate another process on
+    // the television: every directive this file can send only speaks or plays
+    // audio, so "search the TV" would otherwise start a stream on the Echo that
+    // heard it. Instead the intent becomes a command the Vega app polls for.
+    //
+    // Pairing is the gate. The TV shows six digits, the listener says them
+    // here, and from then on this Alexa identity - the derived device id below,
+    // the same one every tool call uses - may queue work for that television.
+    if (intent === 'PairTvIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot pair a TV.', keepAttributes(envelope)),
+        );
+      }
+      // A codeless "pair my TV" reaches this branch with an empty slot (the
+      // model's dialog asks for the digits, but an older deployed model or an
+      // already-open session will not). Ask here, keep the session open, and
+      // leave PAIR_ATTRIBUTE so the next sentence - the digits - is claimed
+      // before routing (pendingPairDigits).
+      const code = pairingDigits(envelope.request?.intent?.slots?.code?.value ?? '');
+      if (code.length !== 6) {
+        return reply.send(
+          spoken(
+            PAIR_CODE_QUESTION,
+            keepAttributes(envelope, { [PAIR_ATTRIBUTE]: true }),
+            PAIR_CODE_REPROMPT,
+          ),
+        );
+      }
+      if (!(await claimPairing(code, caller)).paired) {
+        return reply.send(
+          spoken(
+            PAIR_INVALID_SPEECH,
+            keepAttributes(envelope, { [PAIR_ATTRIBUTE]: true }),
+            PAIR_CODE_REPROMPT,
+          ),
+        );
+      }
+      // The session ends with the pairing. Keeping it open is what made the
+      // documented next sentence fail: while a session is live Alexa stops
+      // treating "ask Globie Earth" as an invocation and feeds those words to
+      // the model, where no sample covers them. Ending the session means the
+      // listener's next "ask Globie Earth ..." is parsed as a fresh launch.
+      return reply.send(ending('Paired. You can now say: search the TV for forest podcasts.'));
+    }
+
+    if (intent === 'SearchOnTvIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot search the TV.'));
+      }
+      const query = envelope.request?.intent?.slots?.query?.value?.trim() ?? '';
+      if (!query) {
+        return reply.send(
+          ending('What should I search the TV for? Say, ask Globie Earth to search the TV for forest podcasts.'),
+        );
+      }
+      // The search itself runs on the TV, against the same search_podcasts tool
+      // this server exposes. The Skill only hands over the words, so the reply
+      // does not need to wait for the library - which keeps it inside Alexa's
+      // eight-second budget even when the podcast proxy is slow.
+      const sent = await enqueueForAlexa(caller, { type: 'search', query });
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      // Also the end of the conversation: the TV has the words, and the next
+      // command arrives as a fresh "ask Globie Earth ..." invocation.
+      return reply.send(ending(`Searching the TV for ${query}.`));
+    }
+
+    // "Open the forest hour podcast on the TV". Unlike SearchOnTvIntent this
+    // cannot hand the words over: the television has no feed-by-id route, so
+    // the show is resolved here and travels in the command. The extra lookup
+    // is one indexed search against the podcast proxy, well inside the
+    // latency budget.
+    if (intent === 'OpenPlayerIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot open the TV.'));
+      }
+      const title = envelope.request?.intent?.slots?.feed?.value?.trim() ?? '';
+      if (!title) {
+        return reply.send(
+          ending('Which podcast should I open? Say, ask Globie Earth to open the forest hour podcast on the TV.'),
+        );
+      }
+      if (!(await isPaired(caller))) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+
+      let feed: FeedList['feeds'][number] | undefined;
+      try {
+        const { feeds } = await callProxy<FeedList>(
+          'podcast',
+          `/v1/podcast/search?q=${encodeURIComponent(title)}&max=5`,
+          caller,
+        );
+        feed = feeds?.[0];
+      } catch (error) {
+        request.log.error({ err: error, title }, 'alexa: could not resolve a podcast for the TV');
+        return reply.send(
+          ending('I could not reach the podcast library just now. Please try again in a moment.'),
+        );
+      }
+      if (!feed) {
+        return reply.send(ending(`I could not find a podcast called ${title}.`));
+      }
+
+      const sent = await enqueueForAlexa(caller, { type: 'openFeed', feedId: feed.id, feed });
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      return reply.send(ending(`Opening ${feed.title} on the TV.`));
+    }
+
+    // The built-in "go home" phrasing ("go home", "go back") has nowhere else
+    // to go: the Skill can only speak, so without this branch it dies in the
+    // model-miss fallback below and the television never moves.
+    // Bare "go home" is a device-level command: on a Fire TV / hub Alexa
+    // answers it itself and the skill is never invoked, so the custom
+    // GoHomeIntent carries the phrasing a skill can actually receive.
+    if (intent === 'AMAZON.NavigateHomeIntent' || intent === 'GoHomeIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+      }
+      const sent = await enqueueForAlexa(caller, { type: 'home' });
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      return reply.send(ending('Going to the home screen on the TV.'));
+    }
+    if (intent === 'BackIntent') {
+      // The TV resolves this against the screen it is showing, so one word
+      // covers the whole tree the BACK key walks.
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+      }
+      const sent = await enqueueForAlexa(caller, { type: 'back' });
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      return reply.send(ending('Going back on the TV.'));
+    }
+    if (
+      intent === 'OpenFocusIntent' ||
+      intent === 'OpenQuestsIntent' ||
+      intent === 'OpenLearnIntent'
+    ) {
+      // Named destinations instead of a D-pad: each one is a chip the viewer
+      // can already press, so the jump adds no reach they did not have.
+      const screen =
+        intent === 'OpenFocusIntent' ? 'focus' : intent === 'OpenQuestsIntent' ? 'quests' : 'learn';
+      const label = screen === 'focus' ? 'Focus mode' : screen === 'quests' ? 'Quests' : 'Globie Learn';
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+      }
+      const sent = await enqueueForAlexa(caller, { type: 'openScreen', screen });
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      return reply.send(ending(`Opening ${label} on the TV.`));
+    }
+    if (intent === 'PauseTvIntent' || intent === 'ResumeTvIntent') {
+      // A separate intent from AMAZON.PauseIntent, which Alexa uses to stop
+      // the skill's own stream (see the branch above). This one moves the TV.
+      const resuming = intent === 'ResumeTvIntent';
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+      }
+      const sent = await enqueueForAlexa(
+        caller,
+        resuming ? { type: 'player.resume' } : { type: 'player.pause' },
+      );
+      if (!sent.queued) {
+        return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
+      }
+      return reply.send(ending(resuming ? 'Resuming the TV.' : 'Pausing the TV.'));
+    }
+
+    // --- Guess Who, played by voice (tvGame.ts) -----------------------------
+    //
+    // These turns keep the session open and reprompt with the question. That is
+    // the one place a live session is worth its cost: an answer is a single
+    // word, so requiring "ask Globie Earth, one" every turn would make the game
+    // unplayable. The invocation trap only bites when the listener re-says the
+    // invocation inside a live session - which is exactly the sentence the
+    // in-game model does not need, because every prompt it hears is an answer
+    // or "next question".
+    //
+    // The score is the server's (tvGame.ts), not this file's and not the
+    // screen's: the same judge answers the D-pad, so a spoken score and a drawn
+    // score cannot disagree.
+    if (intent === 'StartGameIntent' || intent === 'ResumeGameIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot start a game.'));
+      }
+      // "Continue" is the sentence that works after the session was ended by a
+      // reprompt miss or the eight-second timeout. It resumes the score the
+      // server is still holding; only a real "start" deals a new game.
+      if (intent === 'ResumeGameIntent') {
+        const current = await currentGameForAlexa(caller);
+        if (current.ok) return reply.send(gameTurnReply(current, envelope));
+      }
+      return reply.send(gameTurnReply(await startGameForAlexa(caller), envelope));
+    }
+
+    if (intent === 'AnswerIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot score that.'));
+      }
+      const option = optionNumberFrom(envelope);
+      if (option === null) {
+        return reply.send(
+          spoken('I did not catch which one. Say one, two or three.', {}, 'Say one, two or three.'),
+        );
+      }
+      return reply.send(gameTurnReply(await answerForAlexa(caller, option), envelope));
+    }
+
+    // Kept apart from AMAZON.NextIntent because the built-in's samples cannot
+    // be extended, and "next question" is the sentence the game prompts with.
+    if (intent === 'NextQuestionIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot move the quiz on.'));
+      }
+      return reply.send(gameTurnReply(await skipForAlexa(caller), envelope));
+    }
+
+    if (intent === 'ScoreIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot read the score.'));
+      }
+      const current = await currentGameForAlexa(caller);
+      if (!current.ok) return reply.send(gameFailureReply(current.reason, envelope));
+      const { score, total } = current.snapshot;
+      if (current.finished) {
+        return reply.send(ending(`You scored ${score} out of ${total}.`));
+      }
+      // The question is repeated with the score, so the listener can answer in
+      // the same breath - the reason the session is still open.
+      return reply.send(
+        spoken(`You have ${score} correct so far. ${current.speech}`, {}, current.reprompt),
+      );
+    }
+
+    if (intent === 'QuitGameIntent') {
+      const caller = callerFor(envelope);
+      if (!caller) {
+        request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
+        return reply.send(ending('I could not tell who is asking, so I cannot end the game.'));
+      }
+      if (!(await quitForAlexa(caller))) {
+        return reply.send(ending('No game is running.'));
+      }
+      return reply.send(ending('Ending the game.'));
     }
 
     // Everything else that is not our own intent is a model miss - most often
@@ -1553,20 +2544,46 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     // the listener to rephrase is the only honest thing left to do, and naming
     // the last subject keeps the thread: "we were talking about green curry"
     // tells the listener the skill was following along rather than starting over.
+    //
+    // The session ends here rather than reprompting. A reprompt keeps the mic
+    // open, and while a session is live a repeated "ask Globie Earth to ..." is
+    // fed to the model verbatim instead of being read as a new invocation - so
+    // a listener who retries the same sentence falls back again, indefinitely.
     if (intent !== 'AskGlobieIntent') {
+      // A miss inside a game is not a failed question - it is usually an
+      // answer the model could not map ("the big one", "the stripey one").
+      // Repeating the question once is the right recovery; repeating it twice
+      // is not, so the second miss ends the session and lets the listener
+      // restart the invocation, while the game itself stays alive on the
+      // server for a "continue the game".
+      const caller = callerFor(envelope);
+      if (caller && (await gameOpenForAlexa(caller))) {
+        const misses = Number(envelope.session?.attributes?.[GAME_MISS_ATTRIBUTE] ?? 0) + 1;
+        if (misses < GAME_MISS_LIMIT) {
+          const current = await currentGameForAlexa(caller);
+          if (current.ok) {
+            return reply.send(
+              spoken(
+                `I did not catch an answer. ${current.speech}`,
+                { [GAME_MISS_ATTRIBUTE]: misses },
+                current.reprompt,
+              ),
+            );
+          }
+        }
+        return reply.send(ending(`Ending the game for now. ${GAME_GUIDE_SPEECH}`));
+      }
+
       const subject = lastSubject(envelope);
-      return reply.send(
-        spoken(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH, keepAttributes(envelope)),
-      );
+      return reply.send(ending(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH));
     }
 
-    const utterance = envelope.request?.intent?.slots?.query?.value?.trim() ?? '';
-    if (!utterance) {
-      const subject = lastSubject(envelope);
-      return reply.send(
-        spoken(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH, keepAttributes(envelope)),
-      );
-    }
+    // Samples written without `{query}` ("site conditions", "what's happening
+    // right now") match this intent with an empty slot. They all ask the same
+    // question, so an empty slot is routed as that question instead of being
+    // reported as a miss - the listener said something the model recognised.
+    const utterance =
+      envelope.request?.intent?.slots?.query?.value?.trim() || 'what is the site like right now';
 
     const caller = callerFor(envelope);
     if (!caller) {

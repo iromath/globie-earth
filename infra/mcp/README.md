@@ -23,12 +23,13 @@ Action API, which is keyless and outside the stack entirely.
 
 ## Tools
 
-**53 tools in two groups.** The first group — 17 Globie Earth tools — exposes the
-reforestation backend. Two of them change state (`adopt_species` and
-`generate_soundscape`); the rest are read-only. The second group — 36 **Openmind
-Travel** tools (prefixed `om_`) — wraps the Openmind.Travel REST catalogue
-(tours, destinations, flights, guides, community, trip planning and impact).
-All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`.
+**55 tools in two groups.** The first group — 19 Globie Earth tools — exposes the
+reforestation backend. Three of them change state (`adopt_species`,
+`generate_soundscape` and `publish_soundscape`); the rest are read-only. The
+second group — 36 **Openmind Travel** tools (prefixed `om_`) — wraps the
+Openmind.Travel REST catalogue (tours, destinations, flights, guides, community,
+trip planning and impact). All `om_` tools are read-only except
+`om_save_trip_idea` and `om_save_itinerary`.
 
 | Tool | What it does | Backend |
 | --- | --- | --- |
@@ -44,6 +45,8 @@ All `om_` tools are read-only except `om_save_trip_idea` and `om_save_itinerary`
 | `get_eco_balance` | This caller's eco-token balance. | `eco_token_balance` read (RLS-scoped) |
 | `generate_soundscape` | Queues a generated piece of music for the site (mutating). | Studio proxy `POST /v1/studio/tracks` |
 | `get_soundscape` | Checks a queued soundscape by its track id, and returns the audio URL once the render is ready. | Studio proxy `GET /v1/studio/tracks/:id` |
+| `publish_soundscape` | Publishes one of the caller's finished soundscapes to the public sound library (mutating). | Studio proxy via `setTrackVisibility`; `studioLibrary` read |
+| `search_web` | Live web search for anything the site's own records do not hold, returning pages with their own URLs and naming the open web as the source. | Tavily (external, not Globie data) |
 | `search_podcasts` | Searches the podcast library for shows about the living world. | Podcast proxy `GET /v1/podcast/search` |
 | `get_trending_podcasts` | Lists shows trending in the podcast library, optionally by category. | Podcast proxy `GET /v1/podcast/trending` |
 | `get_podcasts_by_theme` | Lists the listening themes, or the shows matching one theme. | Podcast proxy `GET /v1/podcast/themes`, `GET /v1/podcast/bytheme` |
@@ -147,7 +150,7 @@ here. The two tools say "No destinations found." and "No categories available."
 in the spoken line; nothing is substituted from another endpoint to paper over
 it.
 
-The browser MCP client (`infra/mcp-client/`) renders all 53 tools from
+The browser MCP client (`infra/mcp-client/`) renders all 55 tools from
 `tools/list` with no hard-coded list. Three trip-planning tools
 (`om_plan_trip`, `om_save_trip_idea`, `om_save_itinerary`) take `array` or
 `object` arguments; the client's form builder accepts those as JSON literals

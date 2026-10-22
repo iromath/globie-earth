@@ -14,7 +14,7 @@ import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
 /** One feed as the podcast proxy emits it (infra/podcast/src/server.ts). */
-interface PodcastFeed {
+export interface PodcastFeed {
   id: number;
   url: string;
   title: string;
@@ -35,7 +35,7 @@ interface PodcastFeed {
 }
 
 /** Both read routes answer with the same envelope. */
-interface FeedList {
+export interface FeedList {
   feeds: PodcastFeed[];
 }
 

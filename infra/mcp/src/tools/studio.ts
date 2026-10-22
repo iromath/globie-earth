@@ -1,5 +1,6 @@
-// The soundscape tools: queuing a generated piece through the studio proxy, and
-// checking on one that is already rendering.
+// The soundscape tools: queuing a generated piece through the studio proxy,
+// checking on one that is already rendering, and publishing a finished one to
+// the public library.
 //
 // The proxy holds the Gemini key and enforces the daily render quota; this server
 // sees neither. A track renders asynchronously - one synchronous provider call
@@ -11,6 +12,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Caller } from '../identity.js';
 import { callProxy, publicUrl } from '../proxy.js';
+import { libraryTracks, newestReady, setTrackVisibility } from '../studioLibrary.js';
 import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
@@ -164,6 +166,58 @@ export function registerStudioTools(server: McpServer, caller: Caller): void {
             invoking: 'Checking the soundscape…',
             invoked: track.title || 'Soundscape',
           },
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'publish_soundscape',
+    {
+      title: 'Publish a soundscape',
+      description:
+        'Publishes one of this listener\'s finished soundscapes to the Globie Earth public ' +
+        'sound library, where anyone browsing the site can find and play it. This CHANGES ' +
+        'STATE and makes the track public, so ask before calling it. Without a trackId it ' +
+        'publishes the newest soundscape that has finished rendering. Only a finished render ' +
+        'can be published, and the proxy checks the title and style before accepting it.',
+      inputSchema: {
+        trackId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'The trackId to publish. Defaults to the newest finished soundscape this device made.',
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ trackId }) => {
+      try {
+        // `??` short-circuits, so the library is only read when no id was named -
+        // and the newest finished track is the one a voice turn means by
+        // "my soundscape".
+        const resolved = trackId ?? newestReady(await libraryTracks(caller))?.id;
+        if (!resolved) {
+          return jsonResult(
+            { published: false, reason: 'no-ready-track' },
+            'You have no finished soundscape to publish yet. Ask me to make one first.',
+          );
+        }
+        const published = await setTrackVisibility(caller, resolved, 'public');
+        return jsonResult(
+          {
+            trackId: published.id,
+            title: published.title,
+            visibility: published.visibility,
+            publishedAt: published.publishedAt,
+            note:
+              'The track is now in the public catalogue. Anyone can find it in the ' +
+              'Globie Earth sound library.',
+          },
+          `"${published.title}" is now public in the Globie Earth sound library.`,
         );
       } catch (error) {
         return errorResult(error);

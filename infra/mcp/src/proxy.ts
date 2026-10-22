@@ -119,7 +119,7 @@ export function absoluteUrl(service: ProxyService, path: string | null): string 
 }
 
 interface ProxyRequest {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
 }
 

@@ -1,0 +1,12 @@
+# The web image only needs the two payload trees. Everything else (node_modules,
+# dist, android build outputs, Dev-Docs, the MCP server) stays out of the context.
+*
+!android
+!android/app
+!android/app/src
+!android/app/src/main
+!android/app/src/main/assets
+!android/app/src/main/assets/public
+!public
+!public/voice
+!public/voice/guides

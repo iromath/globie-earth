@@ -10,7 +10,7 @@
     />
   </head>
   <body>
-    <div class="app">
+    <div class="app" id="host-app">
       <header class="masthead">
         <p class="eyebrow">Alexa+ track · runtime hook</p>
         <h1>Globie Earth <span class="thin">MCP client</span></h1>
@@ -201,6 +201,78 @@
           <audio id="soundscape-audio" preload="metadata"></audio>
           <p class="status" id="player-status" role="status"></p>
         </div>
+      </section>
+    </div>
+
+    <!-- /play/<code>: a phone's half of a challenge room. It is the same shell
+         as the host above - one page, no router - but a phone opens the game
+         directly and never sees the MCP panels. The answer keys stay on the
+         server; this page draws what the room is willing to show it. -->
+    <div class="app" id="play-app" hidden>
+      <header class="masthead">
+        <p class="eyebrow">Globie Earth · challenge</p>
+        <h1>Room <span class="thin" id="play-code"></span></h1>
+        <p class="tagline" id="play-lead">
+          Type a name, then answer on this phone. The television is the board.
+        </p>
+      </header>
+
+      <section class="panel" id="play-join" aria-labelledby="play-join-heading">
+        <h2 id="play-join-heading">Take a seat</h2>
+        <form id="play-join-form" class="grid-form" autocomplete="off">
+          <label>
+            <span>Your name</span>
+            <input
+              id="play-name"
+              type="text"
+              maxlength="16"
+              required
+              spellcheck="false"
+              placeholder="A name the TV can show"
+            />
+          </label>
+          <div class="actions">
+            <button id="play-join-button" type="submit">Join</button>
+          </div>
+        </form>
+        <p class="hint">
+          Up to eight phones. Your score is kept by the server, not by this page, so
+          refreshing the phone does not change it.
+        </p>
+        <p class="status" id="play-join-status" role="status"></p>
+      </section>
+
+      <section class="panel" id="play-room" hidden aria-labelledby="play-room-heading">
+        <h2 id="play-room-heading">
+          <span id="play-phase">Lobby</span> ·
+          <span id="play-round">0 / 0</span>
+          <span class="play-clock" id="play-clock"></span>
+        </h2>
+        <p class="status" id="play-room-status" role="status"></p>
+        <!-- Phase D: this phone may be a camera for the TV. Off until asked,
+             and the frames never leave the room. -->
+        <div class="play-camera" id="play-camera">
+          <div class="play-camera-head">
+            <h3>Family camera</h3>
+            <button id="play-camera-toggle" class="play-camera-btn" type="button" aria-pressed="false">
+              Camera off
+            </button>
+          </div>
+          <video id="play-camera-preview" class="play-camera-preview" playsinline muted hidden></video>
+          <p class="hint" id="play-camera-status">
+            Off by default. This phone shows a small live picture on the TV in this
+            room; nothing is recorded or kept.
+          </p>
+        </div>
+        <p class="play-clue" id="play-clue" hidden></p>
+        <div class="play-tiles" id="play-tiles"></div>
+        <p class="play-chip" id="play-chip" role="status" hidden></p>
+        <ol class="play-board" id="play-board"></ol>
+      </section>
+
+      <section class="panel" id="play-over" hidden aria-labelledby="play-over-heading">
+        <h2 id="play-over-heading">That room is closed</h2>
+        <p class="hint" id="play-over-text"></p>
       </section>
     </div>
 

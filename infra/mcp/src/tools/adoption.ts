@@ -3,13 +3,14 @@
 // These wrap the same RPCs the app calls (src/lib/api.ts recordPurchase) and the
 // same device-scoped tables that the RLS policies already pin to the caller.
 // Nothing here invents state: an adoption is the row api.create_adoption writes,
-// a deed is the row it issues, and a balance is the sum of api.eco_token_balance.
+// a deed is the row it issues, and a balance is api.eco_balance() - the adoption
+// ledger plus the games' ledger, so the badge and the TV tally agree.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { listDeeds, toDeed } from '../deeds.js';
 import type { Caller } from '../identity.js';
-import { get, rpc } from '../postgrest.js';
+import { rpc } from '../postgrest.js';
 import { uiUriForTool } from '../ui/apps.js';
 import { errorResult, jsonResult } from './result.js';
 
@@ -39,10 +40,16 @@ interface BalanceRow {
   balance: number;
 }
 
-/** The caller's balance, summed across its devices. Zero when it has none. */
+/**
+ * The caller's eco-token balance, summed across its devices. Zero when it has
+ * none.
+ *
+ * api.eco_balance() is the one definition of the total: it adds the games'
+ * ledger to the adoption balance, so this tool and the TV's game tally cannot
+ * report two numbers for the same wallet (schema/258_one_eco_balance.sql).
+ */
 async function readBalance(caller: Caller): Promise<number> {
-  const rows = await get<BalanceRow[]>('eco_token_balance?select=balance', caller);
-  return rows.reduce((total, row) => total + row.balance, 0);
+  return rpc<number>('eco_balance', {}, caller);
 }
 
 export function registerAdoptionTools(server: McpServer, caller: Caller): void {
@@ -102,23 +109,22 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
         const tokensAwarded = fresh ? adoption.deed.trees_planted * TOKENS_PER_SAPLING : 0;
 
         // Mirrors recordPurchase: only a fresh adoption is credited, and a
-        // replay reads the balance back rather than appending a duplicate
-        // ledger row through award_eco_tokens.
-        const balance =
-          tokensAwarded > 0
-            ? (
-                await rpc<BalanceRow>(
-                  'award_eco_tokens',
-                  {
-                    p_delta: tokensAwarded,
-                    p_reason: 'adoption',
-                    p_source_type: 'adoption',
-                    p_source_id: adoption.adoption.id,
-                  },
-                  caller,
-                )
-              ).balance
-            : await readBalance(caller);
+        // replay does not append a duplicate ledger row through
+        // award_eco_tokens. Either way the reply reads the one balance, so the
+        // number spoken here matches the home badge and the game tally.
+        if (tokensAwarded > 0) {
+          await rpc<BalanceRow>(
+            'award_eco_tokens',
+            {
+              p_delta: tokensAwarded,
+              p_reason: 'adoption',
+              p_source_type: 'adoption',
+              p_source_id: adoption.adoption.id,
+            },
+            caller,
+          );
+        }
+        const balance = await readBalance(caller);
 
         const stage = adoption.deed.stages[adoption.deed.stage_index];
         const spoken = adoption.replayed
@@ -204,22 +210,21 @@ export function registerAdoptionTools(server: McpServer, caller: Caller): void {
       title: 'Get my eco-token balance',
       description:
         'The caller\'s current eco-token balance, summed across their devices. Eco-tokens ' +
-        'are earned by adopting trees. Read-only.',
+        'are earned by adopting trees and by playing the TV games. Read-only.',
       annotations: { readOnlyHint: true, openWorldHint: false },
       _meta: { ui: { resourceUri: uiUriForTool('get_eco_balance') } },
     },
     async () => {
       try {
-        const rows = await get<BalanceRow[]>('eco_token_balance?select=balance', caller);
-        const balance = rows.reduce((total, row) => total + row.balance, 0);
-        const spoken = rows.length
-          ? `Your eco-token balance is ${balance}. Eco-tokens are earned by adopting trees, at ${TOKENS_PER_SAPLING} per sapling.`
-          : `You have no eco-tokens on this device yet. They are earned by adopting trees, at ${TOKENS_PER_SAPLING} per sapling.`;
+        const balance = await readBalance(caller);
+        const spoken = balance > 0
+          ? `Your eco-token balance is ${balance}. Eco-tokens are earned by adopting trees, at ${TOKENS_PER_SAPLING} per sapling, and by playing the games.`
+          : `You have no eco-tokens on this device yet. They are earned by adopting trees, at ${TOKENS_PER_SAPLING} per sapling, and by playing the games.`;
         return jsonResult(
           {
             balance,
             tokensPerSapling: TOKENS_PER_SAPLING,
-            note: rows.length ? null : 'This device has never held eco-tokens.',
+            note: balance > 0 ? null : 'This device has never held eco-tokens.',
           },
           spoken,
           {

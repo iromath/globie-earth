@@ -16,6 +16,7 @@ import type {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { GlobieMcpClient, firstText, isMutating, toolFields, type Handshake, type ToolField } from './mcp';
+import { mountPlay, playCode } from './play';
 import {
   recorderSupport,
   speak,
@@ -1930,10 +1931,17 @@ for (const event of ['timeupdate', 'loadedmetadata', 'play', 'pause', 'ended'] a
 
 /* ── Boot ───────────────────────────────────────────────────────────────── */
 
-urlField.value = defaultEndpoint();
-deviceField.value = persistentDeviceId();
-setConnectedState(false);
-renderVoiceSupport();
-renderVoiceOptions();
-selectTab('tools');
-renderTranscript();
+// One shell, two pages. /play/<code> is a phone's half of a challenge room;
+// every other path is the MCP host. A phone must not start the host boot.
+const roomCode = playCode();
+if (roomCode) {
+  mountPlay(roomCode);
+} else {
+  urlField.value = defaultEndpoint();
+  deviceField.value = persistentDeviceId();
+  setConnectedState(false);
+  renderVoiceSupport();
+  renderVoiceOptions();
+  selectTab('tools');
+  renderTranscript();
+}

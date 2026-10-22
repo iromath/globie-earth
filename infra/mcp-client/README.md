@@ -122,6 +122,28 @@ same way it derives the API base (`mcp.*` → `studio.*`, localhost → the loca
 studio port). While the render is still running the panel says so and keeps
 checking; if it fails, the panel shows the studio's reason.
 
+## A phone in a challenge room
+
+The same shell also serves `/play/<code>` — one page, no router. nginx's SPA
+fallback returns this shell for that path, and the boot code branches on it: a
+phone mounts the challenge board and never starts the MCP host wiring. The
+television shows a six-digit code; open `https://…/play/123456` on a phone, type
+a name, and answer on the tiles.
+
+The phone talks to the **MCP server**, not PostgREST, so it derives that origin
+separately (`mcp-client.*` → `mcp.*`, localhost → `http://localhost:8092`).
+`?relay=http://192.168.1.10:8092` overrides it for a LAN demo.
+
+- **The join token lives in memory only.** A reload rejoins and receives a
+  rotated token; the server keeps the score, so refreshing does not change it.
+- **Answers are never scored locally.** The press is posted with the token and
+  the server's reply is what paints `Correct · +N` or `Not this time · +0`.
+- **A press before the round opens is held, not dropped** — it is re-sent when
+  the stream reports that round as `playing`.
+- **State arrives over SSE** (`GET /v1/challenge/:code/stream`). `EventSource`
+  cannot send headers, so the seat is identified by `?device_id=`; a dropped
+  stream reconnects on its own and the seat stays valid.
+
 ## Evidence, not vibes
 
 The **Transcript** tab is an operation log of the session — method, direction and
@@ -173,8 +195,9 @@ the schema rather than from a list of tool names.
 | --- | --- |
 | `src/mcp.ts` | The MCP client wrapper — connect, list tools/resources/prompts, call/read/render, and the transcript. |
 | `src/main.ts` | DOM wiring: handshake panel, tool forms from JSON Schema, per-tab rendering. |
+| `src/play.ts` | The phone board at `/play/<code>`: join, answer tiles, held answers, SSE subscription. |
 | `src/voice.ts` | Web Speech API in/out, with graceful fallback when unsupported. |
 | `src/style.css` | The dark-forest styling. |
-| `index.html` | The four panels: Connect, Handshake, Voice, Surface. |
+| `index.html` | The MCP panels and the hidden phone board the `/play/<code>` route mounts. |
 | `Dockerfile` | The nginx static-build image: a Node build stage runs `npm run build`, then nginx serves `dist/`. |
 | `nginx.conf` | Cache policy — hashed assets immutable, `index.html` revalidated, SPA fallback. |

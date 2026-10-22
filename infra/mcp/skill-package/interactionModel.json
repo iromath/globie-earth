@@ -46,7 +46,12 @@
         },
         {
           "name": "AMAZON.FallbackIntent",
-          "samples": []
+          "samples": [
+            "repeat that",
+            "say that again",
+            "start over",
+            "i don't know"
+          ]
         },
         {
           "name": "PlaySoundscapeIntent",
@@ -153,6 +158,23 @@
           ]
         },
         {
+          "name": "PublishSoundscapeIntent",
+          "slots": [],
+          "samples": [
+            "publish my soundscape",
+            "publish my sound",
+            "publish my music",
+            "publish the soundscape",
+            "share my soundscape",
+            "share my sound",
+            "make my soundscape public",
+            "make my sound public",
+            "publish my soundscape to the public library",
+            "add my soundscape to the public library",
+            "put my soundscape in the public library"
+          ]
+        },
+        {
           "name": "DisableWebOfferIntent",
           "slots": [],
           "samples": [
@@ -164,7 +186,11 @@
             "stop asking about the web",
             "stop asking me about the web",
             "turn off web search",
-            "stop searching the web"
+            "stop searching the web",
+            "disable web search",
+            "hide web search",
+            "no more web offers",
+            "stop the web search offers"
           ]
         },
         {
@@ -188,16 +214,25 @@
             }
           ],
           "samples": [
-            "about {query}",
+            "tell me more about {query}",
+            "what do you know about {query}",
+            "what is happening at the site",
+            "what's happening at the site",
+            "what is happening right now",
+            "what's happening right now",
+            "how is the site right now",
+            "site conditions",
+            "conditions at the site",
             "what {query}",
             "what is {query}",
             "how {query}",
             "how do i {query}",
             "to find {query}",
-            "to {query}",
             "find {query}",
-            "search for {query}",
             "show me {query}",
+            "to tell me about {query}",
+            "to tell me more about {query}",
+            "to explain {query}",
             "tell me about {query}",
             "give me {query}",
             "check {query}",
@@ -219,11 +254,322 @@
           ]
         },
         {
+          "name": "PairTvIntent",
+          "slots": [
+            {
+              "name": "code",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "pair my tv",
+            "pair the tv",
+            "pair tv",
+            "pair my television",
+            "pair the television",
+            "link my tv",
+            "connect my tv",
+            "my tv is not connected",
+            "ask globie earth to pair my tv",
+            "ask globie earth to pair my television",
+            "pair my globie tv",
+            "link my globie tv",
+            "connect my globie tv",
+            "ask globie earth to pair my globie tv",
+            "pair my tv {code}",
+            "pair the tv {code}",
+            "pair tv {code}",
+            "pair my tv code {code}",
+            "pair my television {code}",
+            "pair the television {code}",
+            "my tv code is {code}",
+            "the tv code is {code}",
+            "my television code is {code}",
+            "pair tv with code {code}",
+            "link my tv {code}",
+            "connect my tv {code}",
+            "to pair my tv {code}",
+            "to link my tv {code}"
+          ]
+        },
+        {
+          "name": "SearchOnTvIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "search the tv for {query}",
+            "search tv for {query}",
+            "search my tv for {query}",
+            "search on the tv for {query}",
+            "search on my tv for {query}",
+            "search the television for {query}",
+            "search the tv for a podcast about {query}",
+            "search for {query} on the tv",
+            "search for {query} on my tv",
+            "find {query} on the tv",
+            "find {query} on my tv",
+            "find {query} on the television",
+            "look for {query} on the tv",
+            "look up {query} on the tv",
+            "look up {query} on my tv",
+            "show {query} on the tv",
+            "show me {query} on the tv",
+            "show me {query} on my tv",
+            "show me {query} on the television",
+            "browse {query} on the tv",
+            "browse {query} on my tv",
+            "on the tv search for {query}",
+            "on my tv search for {query}",
+            "to search the tv for {query}",
+            "to search for {query} on the tv",
+            "to show me {query} on the tv"
+          ]
+        },
+        {
+          "name": "OpenPlayerIntent",
+          "slots": [
+            {
+              "name": "feed",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "open the {feed} podcast on the tv",
+            "open the {feed} show on the tv",
+            "open {feed} on the tv",
+            "open the {feed} podcast on my tv",
+            "open the {feed} show on my tv",
+            "open {feed} on my tv",
+            "open {feed} on the television",
+            "to open the {feed} podcast on the tv",
+            "to open {feed} on the tv",
+            "start the {feed} podcast on the tv"
+          ]
+        },
+        {
+          "name": "StartGameIntent",
+          "slots": [],
+          "samples": [
+            "play guess who",
+            "play the guess who game",
+            "play a game",
+            "play a game on the tv",
+            "start a game",
+            "start the game",
+            "start the quiz",
+            "start guess who",
+            "let's play guess who",
+            "start the game on the tv",
+            "play the quiz on the tv",
+            "open guess who on the tv",
+            "start guess who on the tv",
+            "start the globie earth quiz",
+            "open the globie earth quiz on the tv",
+            "play the globie earth quiz",
+            "ask globie earth to play guess who"
+          ]
+        },
+        {
+          "name": "ResumeGameIntent",
+          "slots": [],
+          "samples": [
+            "continue the game",
+            "continue the quiz",
+            "resume the game",
+            "resume the quiz",
+            "back to the game",
+            "where were we in the game",
+            "continue guess who"
+          ]
+        },
+        {
+          "name": "AnswerIntent",
+          "slots": [
+            {
+              "name": "choice",
+              "type": "GameChoice"
+            }
+          ],
+          "samples": [
+            "{choice}",
+            "i say {choice}",
+            "i choose {choice}",
+            "my answer is {choice}",
+            "the answer is {choice}",
+            "it is {choice}",
+            "it's {choice}",
+            "answer {choice}",
+            "number {choice}",
+            "the {choice} one"
+          ]
+        },
+        {
+          "name": "NextQuestionIntent",
+          "slots": [],
+          "samples": [
+            "next question",
+            "next one",
+            "skip the question",
+            "skip this question",
+            "skip it",
+            "pass",
+            "move to the next question"
+          ]
+        },
+        {
+          "name": "ScoreIntent",
+          "slots": [],
+          "samples": [
+            "what is the score",
+            "what's the score",
+            "what is my score",
+            "what's my score",
+            "how am i doing",
+            "how many did i get right",
+            "what is my score in the game",
+            "what is the score in the game"
+          ]
+        },
+        {
+          "name": "QuitGameIntent",
+          "slots": [],
+          "samples": [
+            "quit the game",
+            "quit the quiz",
+            "end the game",
+            "end the quiz",
+            "stop the game",
+            "exit the game",
+            "leave the game"
+          ]
+        },
+        {
+          "name": "BackIntent",
+          "slots": [],
+          "samples": [
+            "go back",
+            "back",
+            "back one screen",
+            "go to the previous screen",
+            "previous screen",
+            "take me back"
+          ]
+        },
+        {
+          "name": "OpenQuestsIntent",
+          "slots": [],
+          "samples": [
+            "open quests",
+            "go to quests",
+            "show my quests",
+            "open the quests screen"
+          ]
+        },
+        {
+          "name": "OpenLearnIntent",
+          "slots": [],
+          "samples": [
+            "open globie learn",
+            "open learn",
+            "go to globie learn",
+            "open the field guide",
+            "show me the field guide"
+          ]
+        },
+        {
+          "name": "OpenFocusIntent",
+          "slots": [],
+          "samples": [
+            "open focus",
+            "open focus mode",
+            "open daily focus",
+            "go to focus mode",
+            "start daily focus"
+          ]
+        },
+        {
+          "name": "PauseTvIntent",
+          "slots": [],
+          "samples": [
+            "pause the tv",
+            "pause the tv player",
+            "pause on the tv",
+            "pause the show on the tv"
+          ]
+        },
+        {
+          "name": "ResumeTvIntent",
+          "slots": [],
+          "samples": [
+            "resume the tv",
+            "resume the tv player",
+            "resume on the tv",
+            "keep playing on the tv"
+          ]
+        },
+        {
+          "name": "GoHomeIntent",
+          "samples": [
+            "go to the welcome screen",
+            "open the welcome screen",
+            "show the welcome screen",
+            "go back to the welcome screen",
+            "take me to the welcome screen",
+            "open the globie home screen"
+          ]
+        },
+        {
           "name": "AMAZON.NavigateHomeIntent",
-          "samples": []
+          "samples": [
+            "go back to the home screen",
+            "take me home",
+            "show the home screen"
+          ]
         }
       ],
       "types": [
+        {
+          "name": "GameChoice",
+          "values": [
+            {
+              "name": {
+                "value": "one",
+                "synonyms": [
+                  "1",
+                  "first",
+                  "number one",
+                  "the first one"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "two",
+                "synonyms": [
+                  "2",
+                  "second",
+                  "number two",
+                  "the second one"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "three",
+                "synonyms": [
+                  "3",
+                  "third",
+                  "number three",
+                  "the third one"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "PodcastTheme",
           "values": [
@@ -239,11 +585,11 @@
             },
             {
               "name": {
-                "value": "nature"
-              },
-              "synonyms": [
-                "natural"
-              ]
+                "value": "nature",
+                "synonyms": [
+                  "natural"
+                ]
+              }
             },
             {
               "name": {
@@ -252,11 +598,11 @@
             },
             {
               "name": {
-                "value": "climate"
-              },
-              "synonyms": [
-                "climate change"
-              ]
+                "value": "climate",
+                "synonyms": [
+                  "climate change"
+                ]
+              }
             },
             {
               "name": {
@@ -265,42 +611,74 @@
             },
             {
               "name": {
-                "value": "motivational"
-              },
-              "synonyms": [
-                "motivation"
-              ]
+                "value": "motivational",
+                "synonyms": [
+                  "motivation"
+                ]
+              }
             },
             {
               "name": {
-                "value": "personal development"
-              },
-              "synonyms": [
-                "personal growth",
-                "self development"
-              ]
+                "value": "personal development",
+                "synonyms": [
+                  "personal growth",
+                  "self development"
+                ]
+              }
             },
             {
               "name": {
-                "value": "forest"
-              },
-              "synonyms": [
-                "forestry",
-                "trees"
-              ]
+                "value": "forest",
+                "synonyms": [
+                  "forestry",
+                  "trees"
+                ]
+              }
             },
             {
               "name": {
-                "value": "wellbeing"
-              },
-              "synonyms": [
-                "well being",
-                "wellness"
-              ]
+                "value": "wellbeing",
+                "synonyms": [
+                  "well being",
+                  "wellness"
+                ]
+              }
             }
           ]
         }
       ]
-    }
+    },
+    "dialog": {
+      "delegationStrategy": "ALWAYS",
+      "intents": [
+        {
+          "name": "PairTvIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "code",
+              "type": "AMAZON.SearchQuery",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.PairTvIntent.Code"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "Elicit.PairTvIntent.Code",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "What are the six digits shown on the TV? Say them one at a time."
+          }
+        ]
+      }
+    ]
   }
 }

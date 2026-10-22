@@ -25,6 +25,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { alexaHealth, registerAlexaRoute } from './alexa.js';
+import { registerChallengeRoutes } from './challenge.js';
+import { registerChallengePresenceRoutes } from './challengePresence.js';
 import { contributeHealth, registerContributeRoute } from './contribute.js';
 import { getEmbeddingProvider } from './embed.js';
 import { resolveCaller } from './identity.js';
@@ -35,7 +37,11 @@ import { oauthHealth, registerOAuthRoutes } from './oauth.js';
 import { pushDispatcherHealth, startPushDispatcher } from './pushDispatcher.js';
 import { registerRouterRoute, routerHealth } from './router.js';
 import { registerSpeechRoutes, speechHealth } from './speech.js';
+import { registerTvCommandsRoute, tvCommandsHealth } from './tvCommands.js';
+import { registerTvGameRoutes } from './tvGame.js';
+import { registerTvWalletRoutes } from './tvWallet.js';
 import { registerWikiRoute } from './wiki-route.js';
+import { registerSpeciesQrRoute } from './speciesQr.js';
 import { openmindConfigured } from './openmind/client.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -163,6 +169,11 @@ app.get('/health', () => {
     // `certExpiryGraceDays` is non-zero only where Amazon's own certificates are
     // already retired and would otherwise fail every request.
     alexa: alexaHealth(),
+    // The relay that lets the Skill drive the Vega app. Counts only - it holds
+    // no credential and no configuration, so there is nothing else to report.
+    // A non-zero `waiting` with a zero `pairings` would be the one bad shape:
+    // a TV polling for a command no Skill can send.
+    tvCommands: tvCommandsHealth(),
   };
 });
 
@@ -317,6 +328,31 @@ async function main(): Promise<void> {
   // onto this server rather than a second implementation of it.
   registerAlexaRoute(app);
 
+  // The relay between that Skill and the TV app. It sits beside /mcp because a
+  // Skill cannot address another process on the television - its directives
+  // only speak and play audio - so a voiced search becomes a queued command the
+  // app polls for, and the pairing check happens once, here.
+  registerTvCommandsRoute(app);
+
+  // The game half of that relay. The screen publishes the deck it is showing
+  // and reports D-pad answers here; the Skill's spoken answers are judged here
+  // too, so both input paths produce one score rather than two.
+  registerTvGameRoutes(app);
+
+  // The reward wallet the games pay into, and the first place they can be
+  // spent: the mascot wardrobe. Both sit beside the game routes because they
+  // share their identity: a balance belongs to the television's X-Device-Id,
+  // and the award key makes a replayed match credit - or a replayed purchase
+  // debit - exactly once.
+  registerTvWalletRoutes(app);
+
+  // Family party mode. A room shares one screen and one remote, so the server
+  // owns the round clock and the score - the TV only draws what arrives. It
+  // sits beside the game routes because it reuses their judge and their deck,
+  // and beside the wallet because the room pays through the same ledger.
+  registerChallengeRoutes(app);
+  registerChallengePresenceRoutes(app);
+
   // The voice cascade's ears and mouth. They sit beside /mcp for the same
   // reason /route does: the page posts audio here and this server relays it to
   // the self-hosted speech service, so the endpoint and the models stay
@@ -346,6 +382,11 @@ async function main(): Promise<void> {
   // the same Wikipedia lead the describe_species tool answers with, without the
   // page holding any credential - the house reason for every side-route here.
   registerWikiRoute(app);
+
+  // The same species page as a square. The television prints a web address it
+  // cannot open, so the phone scans that page instead; the app ships no QR
+  // encoder, and this keeps the encoder here beside the code it encodes.
+  registerSpeciesQrRoute(app);
 
   // The push dispatcher: the always-on loop that claims un-delivered alerts for
   // every device and hands them to the OneSignal sender - the caller pushSender
