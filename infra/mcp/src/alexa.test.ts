@@ -549,7 +549,11 @@ test('reading the digits pairs the TV and the next search queues for it', async 
   );
 
   assert.match(paired.response.outputSpeech?.text ?? '', /^Paired\./);
-  assert.equal(paired.response.shouldEndSession, true);
+  // The confirmation keeps the session open. Ending it here handed the next
+  // bare sentence to the device ("go home" was silence) or to another skill
+  // ("play guess who" was a trivia skill), so the follow-up now stays here.
+  assert.equal(paired.response.shouldEndSession, false);
+  assert.match(paired.response.reprompt?.outputSpeech?.text ?? '', /go home, or play guess who/);
 
   const searched = await ask(
     envelope(
@@ -584,4 +588,53 @@ test('an unpaired TV request keeps the session open for the pairing phrase', asy
   // This is the defect: ending here closed the session, so the follow-up was no
   // longer addressed to the skill and Alexa's own device intent claimed it.
   assert.equal(reply.response.shouldEndSession, false);
+});
+
+// --- Session lock ----------------------------------------------------------
+//
+// While the conversation is live the skill should be the only thing the
+// listener has to talk to. A model miss used to end the session, which handed
+// the next sentence to the device: "tell me about trees that fix paddy soil"
+// became an Alexa general-knowledge answer, "play guess who" was claimed by
+// another skill, and a retried pairing phrase went nowhere. These turns pin
+// the lock and the one sentence that leaves it.
+
+test('a model miss keeps the session open and names the exit', async () => {
+  const reply = await ask(
+    envelope(
+      { type: 'IntentRequest', intent: { name: 'AMAZON.FallbackIntent', slots: {} } },
+      'user-lock-miss',
+      {},
+      { globieLastSubject: 'trees that fix paddy soil' },
+    ),
+  );
+
+  assert.equal(reply.response.shouldEndSession, false);
+  assert.match(reply.response.outputSpeech?.text ?? '', /trees that fix paddy soil/);
+  assert.match(reply.response.outputSpeech?.text ?? '', /goodbye/);
+  assert.match(reply.response.reprompt?.outputSpeech?.text ?? '', /goodbye/);
+});
+
+test('exit closes the session', async () => {
+  const reply = await ask(
+    envelope(
+      { type: 'IntentRequest', intent: { name: 'ExitGlobieIntent', slots: {} } },
+      'user-lock-exit',
+    ),
+  );
+
+  assert.equal(reply.response.shouldEndSession, true);
+  assert.match(reply.response.outputSpeech?.text ?? '', /Goodbye/);
+});
+
+test('a TV command with nothing to act on keeps the session open', async () => {
+  const reply = await ask(
+    envelope(
+      { type: 'IntentRequest', intent: { name: 'SearchOnTvIntent', slots: {} } },
+      'user-lock-tv',
+    ),
+  );
+
+  assert.equal(reply.response.shouldEndSession, false);
+  assert.match(reply.response.outputSpeech?.text ?? '', /What should I search the TV for/);
 });

@@ -125,15 +125,30 @@ const LAUNCH_SPEECH =
 const HELP_SPEECH =
   'You can say things like, tell me about trees that fix paddy soil, what the site is like ' +
   'right now, search the TV for forest podcasts, or play a thirty minute guided meditation. ' +
-  'What would you like to know?';
+  'Say goodbye at any time to leave Globie Earth. What would you like to know?';
 
 const FALLBACK_SPEECH =
   'I did not catch a question in that. Try saying, tell me about trees that fix paddy soil, ' +
-  'or, search the TV for forest podcasts.';
+  'or say goodbye to leave Globie Earth.';
 
 const GOODBYE_SPEECH = 'Goodbye from the Globie Earth forest.';
 
-const REPROMPT_SPEECH = 'What else would you like to know?';
+/**
+ * What every reply that keeps the session open says when the listener goes quiet.
+ *
+ * Naming the exit is what makes the open session escapable. While it is live
+ * every utterance is addressed to this skill, so a listener who wants a
+ * different assistant needs a sentence that ends the lock rather than one that
+ * asks a question.
+ *
+ * "goodbye" is that sentence. It is advertised rather than a bare "exit"
+ * because the platform swallows "exit"/"quit" itself - the simulator shows a
+ * SessionEndedRequest with reason USER_INITIATED and the skill never runs, so
+ * there is no spoken goodbye to confirm the lock released. "goodbye" reaches
+ * the skill as AMAZON.StopIntent, which is the same branch that answers
+ * ExitGlobieIntent.
+ */
+const REPROMPT_SPEECH = 'What else would you like to know? Or say goodbye to leave Globie Earth.';
 
 const NO_MATCH_SPEECH =
   'I could not find a tool for that. Try asking about the forest’s species, the ' +
@@ -304,6 +319,17 @@ const NOT_PAIRED_SPEECH =
 const NOT_PAIRED_REPROMPT = 'Say: pair my TV.';
 
 /**
+ * What the Skill says after it has moved the TV, instead of ending the turn.
+ *
+ * These replies used to end the session, which handed the next bare sentence
+ * back to the device: "go home" was consumed by the device's own navigation
+ * (silence) and "play guess who" was claimed by the first third-party Skill
+ * that samples it. A live session is the only thing that keeps the words
+ * after a command ours.
+ */
+const TV_FOLLOW_UP = 'You can say: play guess who, go home, or open quests.';
+
+/**
  * Where a listener's "do not offer me the open web" answer is kept.
  *
  * Scoped to the session on purpose. This webhook is rebuilt from nothing on
@@ -410,10 +436,21 @@ function gameFailureReply(reason: GameFailure, envelope: AlexaEnvelope): AlexaSp
     return spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT);
   }
   if (reason === 'no_deck') {
-    return ending(`I cannot see a quiz on the TV. ${GAME_START_GUIDE}`);
+    // The TV was just told to open Guess Who (tvGame.startGameForAlexa), so
+    // the next sentence is the one that deals the deck it publishes on mount.
+    // The session stays open for that sentence: ending it here made
+    // "start the game" fall to the device's own "which skill do you want to
+    // enable?" prompt instead of this Skill.
+    return spoken(
+      'Opening Guess Who on the TV. Once it is up, say: ask Globie Earth to start the game.',
+      keepAttributes(envelope),
+      'Say: start the game.',
+    );
   }
   if (reason === 'no_session') {
-    return ending(`No game is running. ${GAME_START_GUIDE}`);
+    // Not an exit: the listener asked about a game, so the session stays open
+    // for the sentence that starts one.
+    return spoken(`No game is running. ${GAME_START_GUIDE}`, keepAttributes(envelope), TV_FOLLOW_UP);
   }
   if (reason === 'already_answered') {
     return spoken('That one is already answered. Say next question to move on.', {}, 'Say next question.');
@@ -426,12 +463,13 @@ function gameFailureReply(reason: GameFailure, envelope: AlexaEnvelope): AlexaSp
  *
  * The reprompt repeats the question rather than asking what else the listener
  * wants, because inside a game the only useful next sentence is an answer.
- * A finished game ends the session instead: there is nothing left to answer,
- * and an open session is only worth its cost while questions remain.
+ * A finished game keeps the session open too: the score is spoken into a live
+ * conversation, so a following "play guess who" or "exit" is still addressed
+ * to this skill instead of being handed back to the device.
  */
 function gameTurnReply(turn: GameTurn, envelope: AlexaEnvelope): AlexaSpeech {
   if (!turn.ok) return gameFailureReply(turn.reason, envelope);
-  if (turn.finished) return ending(turn.speech);
+  if (turn.finished) return spoken(turn.speech, {}, TV_FOLLOW_UP);
   // Empty attributes on purpose: a game turn abandons any pending go-ahead
   // question from before the game started, and resets the miss counter.
   return spoken(turn.speech, {}, turn.reprompt);
@@ -1005,8 +1043,16 @@ interface AnswerOutcome {
  * the sentence in the session attributes (PENDING_ATTRIBUTE); the only way the
  * tool then runs is the second pass over that sentence with `confirmed` set
  * (confirmReply) - nothing about the call itself is skipped.
+ *
+ * adopt_species belongs here for a different reason: it issues a Living Deed
+ * and credits eco-tokens, and the Skill takes no payment of its own. A stray
+ * "adopt a tree" must not mint a deed on the strength of a prompt alone.
  */
-const CONFIRMATION_REQUIRED = new Set<string>(['generate_soundscape', 'publish_soundscape']);
+const CONFIRMATION_REQUIRED = new Set<string>([
+  'generate_soundscape',
+  'publish_soundscape',
+  'adopt_species',
+]);
 
 /** The question an unconfirmed state-changing call is turned back into. */
 function goAheadQuestion(tool: string, toolArguments: Record<string, unknown>): string {
@@ -1015,6 +1061,21 @@ function goAheadQuestion(tool: string, toolArguments: Record<string, unknown>): 
     // is resolved on the yes anyway (PENDING_PUBLISH_ATTRIBUTE), so the question
     // stays about "that soundscape" rather than guessing a name.
     return 'I can publish that soundscape to the Globie Earth public library. Shall I go ahead?';
+  }
+  if (tool === 'adopt_species') {
+    // The question names the species and count so the yes is informed, and says
+    // what the tool does not do - it issues the deed, it never charges a card.
+    const species =
+      typeof toolArguments.species_id === 'string' ? toolArguments.species_id.trim() : '';
+    const requested = Number(toolArguments.quantity ?? 1);
+    const quantity = Number.isFinite(requested) && requested > 0 ? Math.trunc(requested) : 1;
+    const saplings = species
+      ? `${quantity} ${species} ${quantity === 1 ? 'sapling' : 'saplings'}`
+      : `${quantity} ${quantity === 1 ? 'sapling' : 'saplings'}`;
+    return (
+      `I can record an adoption of ${saplings} and issue its Living Deed. ` +
+      'That records the adoption in Globie Earth and does not take payment. Shall I go ahead?'
+    );
   }
   const title = typeof toolArguments.title === 'string' ? toolArguments.title.trim() : '';
   return title
@@ -1286,7 +1347,7 @@ function noMatchSpeech(subject: string | null | undefined): string {
 function fallbackSpeech(subject: string): string {
   return (
     `I did not catch a question in that. We were talking about ${subject} - say a little more ` +
-    'about what you want to know, or ask me something else.'
+    'about what you want to know, as a question on its own, or say goodbye to leave Globie Earth.'
   );
 }
 
@@ -2064,7 +2125,16 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     }
 
     const intent = envelope.request?.intent?.name ?? '';
-    if (intent === 'AMAZON.StopIntent' || intent === 'AMAZON.CancelIntent') {
+    // The three ways out of the lock. The session is kept open for every other
+    // turn (spoken()), so closing it has to be something the listener asks for:
+    // "goodbye" / "that's all" / "I'm done" arrive as AMAZON.StopIntent (or as
+    // ExitGlobieIntent when the model wins the race), and "stop" / "cancel" are
+    // the other built-ins that mean the same thing.
+    if (
+      intent === 'AMAZON.StopIntent' ||
+      intent === 'AMAZON.CancelIntent' ||
+      intent === 'ExitGlobieIntent'
+    ) {
       // During a game "stop" has to close the game as well as the conversation:
       // the server side would otherwise keep judging a screen nobody is
       // playing, and the TV would keep mirroring a score that can no longer be
@@ -2101,7 +2171,16 @@ export function registerAlexaRoute(app: FastifyInstance): void {
         );
       }
       if ((await claimPairing(pendingPairCode, pairCaller)).paired) {
-        return reply.send(ending('Paired. You can now say: search the TV for forest podcasts.'));
+        // Same reason as the PairTvIntent branch: a paired confirmation that
+        // ends the session gives the next bare sentence to the device (silence)
+        // or to another Skill ("play guess who").
+        return reply.send(
+          spoken(
+            'Paired. You can now say: go home, or play guess who.',
+            keepAttributes(envelope),
+            'You can say: go home, or play guess who.',
+          ),
+        );
       }
       return reply.send(
         spoken(
@@ -2302,24 +2381,37 @@ export function registerAlexaRoute(app: FastifyInstance): void {
           ),
         );
       }
-      // The session ends with the pairing. Keeping it open is what made the
-      // documented next sentence fail: while a session is live Alexa stops
-      // treating "ask Globie Earth" as an invocation and feeds those words to
-      // the model, where no sample covers them. Ending the session means the
-      // listener's next "ask Globie Earth ..." is parsed as a fresh launch.
-      return reply.send(ending('Paired. You can now say: search the TV for forest podcasts.'));
+      // Stay in the session. Ending it here is what made the next spoken
+      // sentence fall out of this Skill: without a live session "go home" is
+      // consumed by the device's own navigation handler (silence) and "play
+      // guess who" is claimed by the first Skill that samples it. A live
+      // session keeps the next command in this model, where GoHomeIntent and
+      // StartGameIntent are waiting for it.
+      return reply.send(
+        spoken(
+          'Paired. You can now say: go home, or play guess who.',
+          keepAttributes(envelope),
+          'You can say: go home, or play guess who.',
+        ),
+      );
     }
 
     if (intent === 'SearchOnTvIntent') {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot search the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot search the TV.', keepAttributes(envelope)),
+        );
       }
       const query = envelope.request?.intent?.slots?.query?.value?.trim() ?? '';
       if (!query) {
         return reply.send(
-          ending('What should I search the TV for? Say, ask Globie Earth to search the TV for forest podcasts.'),
+          spoken(
+            'What should I search the TV for?',
+            keepAttributes(envelope),
+            'Say what to search the TV for, or say goodbye to leave Globie Earth.',
+          ),
         );
       }
       // The search itself runs on the TV, against the same search_podcasts tool
@@ -2330,9 +2422,11 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      // Also the end of the conversation: the TV has the words, and the next
-      // command arrives as a fresh "ask Globie Earth ..." invocation.
-      return reply.send(ending(`Searching the TV for ${query}.`));
+      // The session stays open so the next sentence ("play guess who") is
+      // still ours; the TV consumes the queue independently of this turn.
+      return reply.send(
+        spoken(`Searching the TV for ${query}.`, keepAttributes(envelope), TV_FOLLOW_UP),
+      );
     }
 
     // "Open the forest hour podcast on the TV". Unlike SearchOnTvIntent this
@@ -2344,12 +2438,18 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot open the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot open the TV.', keepAttributes(envelope)),
+        );
       }
       const title = envelope.request?.intent?.slots?.feed?.value?.trim() ?? '';
       if (!title) {
         return reply.send(
-          ending('Which podcast should I open? Say, ask Globie Earth to open the forest hour podcast on the TV.'),
+          spoken(
+            'Which podcast should I open?',
+            keepAttributes(envelope),
+            'Say the name of a podcast, or say goodbye to leave Globie Earth.',
+          ),
         );
       }
       if (!(await isPaired(caller))) {
@@ -2367,18 +2467,25 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       } catch (error) {
         request.log.error({ err: error, title }, 'alexa: could not resolve a podcast for the TV');
         return reply.send(
-          ending('I could not reach the podcast library just now. Please try again in a moment.'),
+          spoken(
+            'I could not reach the podcast library just now. Please try again in a moment.',
+            keepAttributes(envelope),
+          ),
         );
       }
       if (!feed) {
-        return reply.send(ending(`I could not find a podcast called ${title}.`));
+        return reply.send(
+          spoken(`I could not find a podcast called ${title}.`, keepAttributes(envelope)),
+        );
       }
 
       const sent = await enqueueForAlexa(caller, { type: 'openFeed', feedId: feed.id, feed });
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      return reply.send(ending(`Opening ${feed.title} on the TV.`));
+      return reply.send(
+        spoken(`Opening ${feed.title} on the TV.`, keepAttributes(envelope), TV_FOLLOW_UP),
+      );
     }
 
     // The built-in "go home" phrasing ("go home", "go back") has nowhere else
@@ -2391,13 +2498,24 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot move the TV.', keepAttributes(envelope)),
+        );
       }
       const sent = await enqueueForAlexa(caller, { type: 'home' });
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      return reply.send(ending('Going to the home screen on the TV.'));
+      // Stay in the session here too. Ending it sends the listener back to the
+      // device, where the next bare command ("go to welcome screen", "play
+      // guess who") is no longer ours to answer.
+      return reply.send(
+        spoken(
+          'Going to the home screen on the TV.',
+          keepAttributes(envelope),
+          TV_FOLLOW_UP,
+        ),
+      );
     }
     if (intent === 'BackIntent') {
       // The TV resolves this against the screen it is showing, so one word
@@ -2405,13 +2523,15 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot move the TV.', keepAttributes(envelope)),
+        );
       }
       const sent = await enqueueForAlexa(caller, { type: 'back' });
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      return reply.send(ending('Going back on the TV.'));
+      return reply.send(spoken('Going back on the TV.', keepAttributes(envelope), TV_FOLLOW_UP));
     }
     if (
       intent === 'OpenFocusIntent' ||
@@ -2426,13 +2546,17 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot move the TV.', keepAttributes(envelope)),
+        );
       }
       const sent = await enqueueForAlexa(caller, { type: 'openScreen', screen });
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      return reply.send(ending(`Opening ${label} on the TV.`));
+      return reply.send(
+        spoken(`Opening ${label} on the TV.`, keepAttributes(envelope), TV_FOLLOW_UP),
+      );
     }
     if (intent === 'PauseTvIntent' || intent === 'ResumeTvIntent') {
       // A separate intent from AMAZON.PauseIntent, which Alexa uses to stop
@@ -2441,7 +2565,9 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot move the TV.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot move the TV.', keepAttributes(envelope)),
+        );
       }
       const sent = await enqueueForAlexa(
         caller,
@@ -2450,7 +2576,13 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       if (!sent.queued) {
         return reply.send(spoken(NOT_PAIRED_SPEECH, keepAttributes(envelope), NOT_PAIRED_REPROMPT));
       }
-      return reply.send(ending(resuming ? 'Resuming the TV.' : 'Pausing the TV.'));
+      return reply.send(
+        spoken(
+          resuming ? 'Resuming the TV.' : 'Pausing the TV.',
+          keepAttributes(envelope),
+          TV_FOLLOW_UP,
+        ),
+      );
     }
 
     // --- Guess Who, played by voice (tvGame.ts) -----------------------------
@@ -2470,7 +2602,9 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot start a game.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot start a game.', keepAttributes(envelope)),
+        );
       }
       // "Continue" is the sentence that works after the session was ended by a
       // reprompt miss or the eight-second timeout. It resumes the score the
@@ -2486,7 +2620,9 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot score that.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot score that.', keepAttributes(envelope)),
+        );
       }
       const option = optionNumberFrom(envelope);
       if (option === null) {
@@ -2503,7 +2639,9 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot move the quiz on.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot move the quiz on.', keepAttributes(envelope)),
+        );
       }
       return reply.send(gameTurnReply(await skipForAlexa(caller), envelope));
     }
@@ -2512,13 +2650,17 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot read the score.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot read the score.', keepAttributes(envelope)),
+        );
       }
       const current = await currentGameForAlexa(caller);
       if (!current.ok) return reply.send(gameFailureReply(current.reason, envelope));
       const { score, total } = current.snapshot;
       if (current.finished) {
-        return reply.send(ending(`You scored ${score} out of ${total}.`));
+        // The game is over but the conversation is not: closing the session
+        // here would give the next sentence to the device.
+        return reply.send(spoken(`You scored ${score} out of ${total}.`, {}, TV_FOLLOW_UP));
       }
       // The question is repeated with the score, so the listener can answer in
       // the same breath - the reason the session is still open.
@@ -2531,12 +2673,16 @@ export function registerAlexaRoute(app: FastifyInstance): void {
       const caller = callerFor(envelope);
       if (!caller) {
         request.log.warn({ userId: person.userId ?? null }, 'alexa: the envelope named no caller');
-        return reply.send(ending('I could not tell who is asking, so I cannot end the game.'));
+        return reply.send(
+          spoken('I could not tell who is asking, so I cannot end the game.', keepAttributes(envelope)),
+        );
       }
+      // Quitting the game is not quitting the skill: the session stays open so
+      // the next sentence is still answered here.
       if (!(await quitForAlexa(caller))) {
-        return reply.send(ending('No game is running.'));
+        return reply.send(spoken('No game is running.', {}, TV_FOLLOW_UP));
       }
-      return reply.send(ending('Ending the game.'));
+      return reply.send(spoken('Ending the game.', {}, TV_FOLLOW_UP));
     }
 
     // Everything else that is not our own intent is a model miss - most often
@@ -2545,17 +2691,18 @@ export function registerAlexaRoute(app: FastifyInstance): void {
     // the last subject keeps the thread: "we were talking about green curry"
     // tells the listener the skill was following along rather than starting over.
     //
-    // The session ends here rather than reprompting. A reprompt keeps the mic
-    // open, and while a session is live a repeated "ask Globie Earth to ..." is
-    // fed to the model verbatim instead of being read as a new invocation - so
-    // a listener who retries the same sentence falls back again, indefinitely.
+    // The session stays open on a miss. Ending it here was what handed the next
+    // sentence back to the device: the listener's retry ("tell me about trees
+    // that fix paddy soil") became an Alexa general-knowledge question, and a
+    // phrase another Skill samples was claimed by that Skill. A live session is
+    // the only thing that keeps the words ours. The way out is explicit -
+    // "goodbye" (AMAZON.StopIntent, or ExitGlobieIntent) - and the reprompt says so.
     if (intent !== 'AskGlobieIntent') {
       // A miss inside a game is not a failed question - it is usually an
       // answer the model could not map ("the big one", "the stripey one").
-      // Repeating the question once is the right recovery; repeating it twice
-      // is not, so the second miss ends the session and lets the listener
-      // restart the invocation, while the game itself stays alive on the
-      // server for a "continue the game".
+      // Repeating the question is the right recovery; the session is not
+      // closed for it, because the game is still open on the server and
+      // "continue the game" has to keep reaching this skill.
       const caller = callerFor(envelope);
       if (caller && (await gameOpenForAlexa(caller))) {
         const misses = Number(envelope.session?.attributes?.[GAME_MISS_ATTRIBUTE] ?? 0) + 1;
@@ -2571,11 +2718,23 @@ export function registerAlexaRoute(app: FastifyInstance): void {
             );
           }
         }
-        return reply.send(ending(`Ending the game for now. ${GAME_GUIDE_SPEECH}`));
+        return reply.send(
+          spoken(
+            `I did not catch an answer. ${GAME_GUIDE_SPEECH}`,
+            {},
+            'Say: continue the game. Or say goodbye to leave Globie Earth.',
+          ),
+        );
       }
 
       const subject = lastSubject(envelope);
-      return reply.send(ending(subject ? fallbackSpeech(subject) : FALLBACK_SPEECH));
+      return reply.send(
+        spoken(
+          subject ? fallbackSpeech(subject) : FALLBACK_SPEECH,
+          keepAttributes(envelope),
+          REPROMPT_SPEECH,
+        ),
+      );
     }
 
     // Samples written without `{query}` ("site conditions", "what's happening

@@ -39,7 +39,7 @@ import type { GameSnapshot } from './tvGame.js';
  * The screens voice may name. Every one is a chip or tile the viewer can reach
  * with the D-pad from where they already are, so naming it adds no reach.
  */
-export type TvScreen = 'welcome' | 'quests' | 'learn' | 'focus' | 'settings' | 'wardrobe';
+export type TvScreen = 'welcome' | 'quests' | 'learn' | 'focus' | 'settings' | 'wardrobe' | 'guessWho';
 
 /**
  * The closed set of things voice may ask the TV to do.
@@ -165,6 +165,7 @@ const TV_SCREENS: readonly TvScreen[] = [
   'focus',
   'settings',
   'wardrobe',
+  'guessWho',
 ];
 /**
  * How long a hand-off stays usable. Long enough to pick up the Echo and say the

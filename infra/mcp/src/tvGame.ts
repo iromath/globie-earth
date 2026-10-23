@@ -274,7 +274,15 @@ export async function startGameForAlexa(caller: Caller): Promise<GameTurn> {
 
   const now = Date.now();
   const deck = liveDeck(tvDeviceId, now);
-  if (!deck) return { ok: false, reason: 'no_deck' };
+  if (!deck) {
+    // Spoken from anywhere but the quiz, there is no deck yet: the screen only
+    // publishes one once it is open. Open it, then let the listener say
+    // "start the game" - the next turn finds the deck and deals. This is the
+    // voice-only way in; without it the Skill can only ask the viewer to press
+    // the tile, which is the one thing the relay exists to avoid.
+    enqueueForTv(tvDeviceId, { type: 'openScreen', screen: 'guessWho' });
+    return { ok: false, reason: 'no_deck' };
+  }
 
   const session: GameSession = {
     sessionId: randomUUID(),
@@ -375,6 +383,11 @@ export async function quitForAlexa(caller: Caller): Promise<boolean> {
   const tvDeviceId = await tvDeviceIdForAlexa(caller);
   if (!tvDeviceId) return false;
   sessions.delete(tvDeviceId);
+  // The deck goes with the game. Left behind, it outlives the screen by its
+  // fifteen-minute TTL, and the next "play guess who" starts a game on
+  // questions no screen is showing: the quiz screen reshuffles when it mounts
+  // and republishes, which deletes the session just created here.
+  decks.delete(tvDeviceId);
   enqueueForTv(tvDeviceId, { type: 'game.quit' });
   return true;
 }

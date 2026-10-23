@@ -58,6 +58,14 @@ trip planning and impact). All `om_` tools are read-only except
 resolves to the original deed and reports `replayed: true` instead of issuing a
 second one. The tool records the adoption; it does not itself take payment.
 
+On the Alexa Skill path `adopt_species` is held for a spoken yes before it runs.
+The question names the species and the count, and says plainly that the call
+records the adoption and takes no payment; only a "yes" re-routes it with
+`confirmed: true`. Without that gate a stray "adopt a tree" could mint a Living
+Deed on the strength of a prompt alone, since the Skill has no purchase to
+verify against. `generate_soundscape` and `publish_soundscape` are gated the
+same way.
+
 `describe_photo` is the one tool that reads an image rather than the site's
 own data: it hands the attached photo to the vision model and returns the model's
 description, so a photo of *anything* — a tree or not — has a tool to match. Its
@@ -311,14 +319,27 @@ POST /alexa           no X-Device-Id — this is Amazon's envelope, not ours
                   "shouldEndSession": false } }
 ```
 
-**One catch-all intent.** `AskGlobieIntent` carries a single `AMAZON.SearchQuery`
-slot named `query`, and every sample in the interaction model funnels into it —
-`about {query}`, `what {query}`, `find {query}`, `to {query}` … — so Alexa's only
-job is to hand over the words and the router's job is to decide what they mean.
-The samples are *carrier phrases*, not a list of supported questions: the phrases
-in `skill-package/interactionModel.json` cover the three the help prompt
-advertises (`about`, `what`, `to find`), and any phrasing that opens with one of
-them reaches the same router a typed question would.
+**One catch-all intent among 25 custom ones.** `AskGlobieIntent` carries a
+single `AMAZON.SearchQuery` slot named `query`, and every sample that reaches
+the router funnels into it — `tell me more about {query}`, `what do you know
+about {query}`, `find {query}`, `to find {query}` … — so Alexa's job is to hand
+over the words and the router's job is to decide what they mean. The samples are
+*carrier phrases*, not a list of supported questions: they cover the three the
+help prompt advertises (`about`, `what`, `to find`), and any phrasing that opens
+with one of them reaches the same router a typed question would. A bare
+`about {query}` sample was removed on 2026-10-23 — it carried too little lexical
+signal and fell to `AMAZON.FallbackIntent`. The other 24 custom intents cover
+audio playback, soundscape publishing, the TV relay and Guess Who, and answer
+their backends directly rather than through the router.
+
+**The spend gate.** `generate_soundscape`, `publish_soundscape` and
+`adopt_species` are listed in `CONFIRMATION_REQUIRED`. A call to one of them
+without `confirmed: true` is not run: the adapter speaks a question that names
+what it is about to do and returns `awaitingGoAhead`. The sentence is kept on the
+session, and a bare "yes" (`AMAZON.YesIntent`) re-routes that same sentence with
+`confirmed: true`. A "no" drops it. This matters most for adoption, where the
+Skill has no purchase to check against — the spoken yes is the only thing between
+a stray phrase and a new Living Deed.
 
 **What a Skill cannot do, and what this does about it.** `AMAZON.FallbackIntent`
 is delivered with **no utterance at all**: when the model fails to match, there
@@ -383,6 +404,10 @@ Two files, both under `skill-package/`, both pasted into the developer console:
 The endpoint must be HTTPS with a trusted certificate — it is, it is the same
 host as `/mcp`. Nothing about the Alexa+ add-on path changes: the two live side
 by side on one server and one tool surface.
+
+The full voice reference — every intent and sample utterance, a spoken command
+for each tool, the TV relay and the 15-step smoke-test set — is in
+[`Dev-Docs/ALEXA-VOICE-COMMANDS.md`](../../Dev-Docs/ALEXA-VOICE-COMMANDS.md).
 
 ## Wikipedia lookup — `GET /wiki`
 

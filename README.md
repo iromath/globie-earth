@@ -15,7 +15,7 @@ server and the demo browser MCP client that proves a real MCP host can drive it.
 - **Protocol version:** `2025-11-25`, **pinned**. The server refuses to boot if
   the SDK's newest supported version ever moves past it, so this line cannot
   quietly become false.
-- **Surface:** 53 tools (17 Globie Earth + 36 Openmind.Travel) · 8 resources
+- **Surface:** 55 tools (19 Globie Earth + 36 Openmind.Travel) · 8 resources
   (7 URI templates + 1 static) · 2 prompts, plus 8 browser side-routes and a
   `GET /health`.
 - **Runs at:** `https://mcp.globie.earth`; the demo client at
@@ -64,16 +64,16 @@ curl -s https://mcp.globie.earth/mcp \
 
 ## MCP surface
 
-### Tools (53)
+### Tools (55)
 
-The surface is split into two groups: 17 **Globie Earth** tools (the site's
-catalogue, deeds, soundscapes, and podcasts) and 36 **Openmind.Travel** tools
-(`om_*` prefix) covering tours, flights, destinations, guides, community, trip
-planning and impact. Four Globie tools change state (`adopt_species`,
-`generate_soundscape`, and the two `om_save_*` trip tools); the rest are
-read-only.
+The surface is split into two groups: 19 **Globie Earth** tools (the site's
+catalogue, deeds, soundscapes, podcasts and live web search) and 36
+**Openmind.Travel** tools (`om_*` prefix) covering tours, flights, destinations,
+guides, community, trip planning and impact. Three Globie tools change state
+(`adopt_species`, `generate_soundscape`, `publish_soundscape`), as do the two
+`om_save_*` trip tools; the rest are read-only.
 
-#### Globie Earth (17)
+#### Globie Earth (19)
 
 | Tool | What it does |
 | --- | --- |
@@ -89,6 +89,8 @@ read-only.
 | `get_eco_balance` | This caller's eco-token balance |
 | `generate_soundscape` | Queue a generated piece of music for the site (mutating) |
 | `get_soundscape` | Check a queued soundscape and return its audio URL when ready |
+| `publish_soundscape` | Publish a finished soundscape to the public library (mutating) |
+| `search_web` | Live web search for anything the site's own records do not hold |
 | `search_podcasts` | Search the podcast library for shows about the living world |
 | `get_trending_podcasts` | List trending shows, optionally by category |
 | `get_podcasts_by_theme` | List listening themes, or the shows matching one theme |
@@ -140,7 +142,7 @@ Beside the MCP surface, for the app, the demo client and the Alexa Skill:
 | Route | Purpose |
 | --- | --- |
 | `POST /route` | Turn one natural-language utterance into one tool call |
-| `POST /alexa` | Alexa Skill (ASK) webhook — spoken answers over the same 53 tools |
+| `POST /alexa` | Alexa Skill (ASK) webhook — spoken answers over the same 55 tools |
 | `GET /wiki` | The Wikipedia lead `describe_species` answers with, as plain HTTP |
 | `POST /voice/transcribe` / `POST /voice/speak` | The self-hosted STT/TTS voice loop |
 | `POST /contribute` / `DELETE /contribute/:id` | Offer a species photograph for review |
@@ -155,7 +157,9 @@ developer declares intents and Amazon sends back a matched one. `POST /alexa`
 carries one catch-all intent into the same router `POST /route` uses and runs the
 chosen tool against the same MCP surface in-process, so the two pipelines cannot
 disagree about what this server can do. The interaction model and manifest live
-in [`infra/mcp/skill-package/`](infra/mcp/skill-package).
+in [`infra/mcp/skill-package/`](infra/mcp/skill-package); every intent, sample
+utterance and tool-by-tool spoken command is in
+[`Dev-Docs/ALEXA-VOICE-COMMANDS.md`](Dev-Docs/ALEXA-VOICE-COMMANDS.md).
 
 ---
 

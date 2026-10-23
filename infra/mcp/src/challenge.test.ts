@@ -1074,7 +1074,7 @@ test('a camera stays dark until its phone offers it, then one frame becomes one 
   assert.equal(sent.statusCode, 200, JSON.stringify(sent.body));
   assert.equal(sent.body.slot, 1);
   assert.equal(sent.body.version, 1);
-  assert.equal(sent.body.ttlMs, 1_500);
+  assert.equal(sent.body.ttlMs, 4_000);
 
   // The URL carries the version because an image component caches by URL; the
   // bytes themselves are the JPEG that was posted.

@@ -9,7 +9,17 @@
         },
         {
           "name": "AMAZON.StopIntent",
-          "samples": []
+          "samples": [
+            "exit globie",
+            "exit globie earth",
+            "quit globie",
+            "quit globie earth",
+            "leave globie",
+            "leave globie earth",
+            "end globie",
+            "close globie",
+            "close globie earth"
+          ]
         },
         {
           "name": "AMAZON.PauseIntent",
@@ -370,7 +380,15 @@
             "start the globie earth quiz",
             "open the globie earth quiz on the tv",
             "play the globie earth quiz",
-            "ask globie earth to play guess who"
+            "ask globie earth to play guess who",
+            "ask globie earth to start the game",
+            "ask globie earth to open guess who on the tv",
+            "play globie guess who",
+            "play globie earth guess who",
+            "open globie guess who",
+            "start globie guess who",
+            "open the globie earth guess who game",
+            "start the globie earth guess who game"
           ]
         },
         {
@@ -514,17 +532,45 @@
         {
           "name": "GoHomeIntent",
           "samples": [
+            "go home",
+            "go to home",
+            "go to welcome",
+            "go to welcome screen",
             "go to the welcome screen",
+            "welcome screen",
+            "open welcome",
             "open the welcome screen",
+            "show welcome",
             "show the welcome screen",
             "go back to the welcome screen",
+            "go back home",
             "take me to the welcome screen",
-            "open the globie home screen"
+            "return to the welcome screen",
+            "open the globie home screen",
+            "go to the globie welcome screen",
+            "ask globie earth to go home",
+            "ask globie earth to go to the welcome screen"
+          ]
+        },
+        {
+          "name": "ExitGlobieIntent",
+          "samples": [
+            "exit",
+            "quit",
+            "leave",
+            "goodbye",
+            "good bye",
+            "that's all",
+            "that is all",
+            "i'm done",
+            "we're done"
           ]
         },
         {
           "name": "AMAZON.NavigateHomeIntent",
           "samples": [
+            "go home",
+            "go to the home screen",
             "go back to the home screen",
             "take me home",
             "show the home screen"
