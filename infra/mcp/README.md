@@ -447,9 +447,11 @@ resources.
 DeepSeek ships no audio surface, so *Ask the forest by voice* is a composed loop
 rather than one model: the browser records an utterance, **this server** turns it
 into text with Whisper, `/route` sends that text to DeepSeek, and the reply is
-read back with Kokoro. These two routes are the ears and the mouth — both relay
-to the `speech` service (Speaches) in `infra/docker-compose.yml`, which speaks
-OpenAI-compatible HTTP.
+read back with Kokoro — or with **Amazon Polly** when `TTS_PROVIDER=polly`, which
+is what production runs (`Joanna`, neural engine). These two routes are the ears
+and the mouth. The ears always relay to the `speech` service (Speaches) in
+`infra/docker-compose.yml`, which speaks OpenAI-compatible HTTP; the mouth uses
+that same service unless Polly is selected.
 
 ```
 POST /voice/transcribe   X-Device-Id (or demo bearer) required — the same identity /mcp takes
@@ -458,7 +460,7 @@ POST /voice/transcribe   X-Device-Id (or demo bearer) required — the same iden
 
 POST /voice/speak        X-Device-Id (or demo bearer) required
 { "text": "Kae Na fixes paddy soil." }                 // voice is optional
-→ audio/mpeg  (Kokoro, af_heart)
+→ audio/mpeg  (default: Kokoro `af_heart`; production: Polly `Joanna`)
 ```
 
 `/voice/speak` takes an optional `voice` naming one of the ids `GET /health`
@@ -726,6 +728,9 @@ These are the names the process reads. In `infra/.env` the four origins carry th
 | `SPEECH_STT_MODEL` | no | Speech-to-text model id. Defaults to the multilingual `Systran/faster-whisper-base`. |
 | `SPEECH_TTS_MODEL` | no | Text-to-speech model id. Defaults to `speaches-ai/Kokoro-82M-v1.0-ONNX`. |
 | `SPEECH_TTS_VOICE` | no | The Kokoro voice `/voice/speak` speaks with by default. The client may pick any id `/health` advertises under `speech.voices` instead. Defaults to `af_heart`. |
+| `TTS_PROVIDER` | no | `speaches` (default, self-hosted Kokoro) or `polly` (Amazon Polly). Anything but `polly` means Kokoro, so an unset environment behaves as it did before Polly existed. Production runs `polly`. |
+| `POLLY_VOICE_ID` | no | The Polly voice `/voice/speak` speaks with when `TTS_PROVIDER=polly`. Defaults to `Joanna`. `GET /health` lists the selectable ids. |
+| `POLLY_ENGINE` | no | Polly engine: `standard`, `neural` (default), `long-form` or `generative`. `POLLY_REGION` overrides the region, falling back to `AWS_REGION`. |
 | `ALEXA_SKILL_ID` | no | The skill id (`amzn1.ask.skill.…`) whose `applicationId` `/alexa` accepts. Unset skips that check only; `GET /health` reports it under `alexa.skillId`. |
 | `ALEXA_VERIFY_SIGNATURE` | no | `true` (default) verifies Amazon's request signature on `/alexa`. Set `false` for local development only — it leaves `/alexa` an open path to this server's model key. |
 
@@ -833,6 +838,6 @@ node scripts/bench-embed.mjs 50     # local model by default; EMBEDDING_PROVIDER
 
 [PRODUCT-FEEDBACK.md](./PRODUCT-FEEDBACK.md) is the per-SDK build log the
 hackathon asks for — the MCP TypeScript SDK, Amazon Bedrock, PostgREST, GoTrue,
-Fastify, Open-Meteo, Podcast Index and Suno — written from what actually happened
+Fastify, Open-Meteo, Podcast Index and Gemini (Lyria) — written from what actually happened
 while building this server. Titan's latency and cost rows stay pending until the
 bench runs against an account with Bedrock access.

@@ -41,7 +41,7 @@ so the two podcast tools and the soundscape tools answer with their own
 self-explaining error — which the verifier explicitly accepts (checks 9 and 9b
 below assert exactly that) — and the browser host's read-aloud reports the speech
 service unreachable rather than failing the call. No AWS, DeepSeek, Podcast Index
-or Suno credential was used; the local embedding model ran in-process.
+or Gemini credential was used; the local embedding model ran in-process.
 
 The cookbook layer was applied to the same run: `schema/254_cookbook.sql` against
 the local `db`, the book imported (`25 row(s) upserted`), its 25 passages embedded,

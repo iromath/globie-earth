@@ -9,12 +9,14 @@ that actually happened while building this server; where a number is not yet
 measured, it says so instead of guessing one.
 
 The artifact reviewed here is the MCP server in this directory — the Alexa+
-track submission. It reaches three origins (`POSTGREST_URL`, `STUDIO_URL`,
-`PODCAST_URL`) and holds no third-party credentials of its own: the `studio` and
-`podcast` proxies own the Suno and Podcast Index keys. A fourth external call —
-Wikipedia's MediaWiki Action API, for `describe_species` and the `wikipedia`
-field on the species resources — is keyless, like Open-Meteo, and needs no
-credential either.
+track submission. It reaches four origins (`POSTGREST_URL`, `STUDIO_URL`,
+`PODCAST_URL`, `OPENMIND_API_URL`) and holds its own credentials for the pieces
+it calls directly: the DeepSeek router, the optional Amazon Bedrock embedding
+path and MinIO media storage. The `studio` and `podcast` proxies own the Gemini
+(Lyria) music and Podcast Index keys, and this server never sees either. Two
+further external calls — Open-Meteo and Wikipedia's MediaWiki Action API, the
+latter for `describe_species` and the `wikipedia` field on the species
+resources — are keyless and need no credential at all.
 
 ## At a glance
 
@@ -29,7 +31,7 @@ credential either.
 | Open-Meteo | `get_sanctuary_conditions` (modelled, keyless) | **Yes** — with the non-commercial caveat in mind |
 | Wikipedia (Action API) | `describe_species` + the `wikipedia` species field (keyless lead-section text) | **Yes** — attribution is the only obligation |
 | Podcast Index | `search_podcasts` / `get_trending_podcasts` (via proxy) | **Yes** — 10 req/min on the free tier shapes the design |
-| Suno | `generate_soundscape` (via proxy) | **Yes** — async queue is the right shape for it |
+| Google Gemini (Lyria `lyria-3.5`) | `generate_soundscape` (via proxy) | **Yes** — async queue is the right shape for it |
 
 ## MCP TypeScript SDK (`@modelcontextprotocol/sdk` v1.32.0)
 
@@ -299,10 +301,12 @@ the service's own health route), not an MCP code issue.
 
 **Build again?** Yes.
 
-## Suno
+## Google Gemini (Lyria)
 
 **Used for:** `generate_soundscape`, called through the `studio` proxy
-(`STUDIO_URL`), which holds the key.
+(`STUDIO_URL`), which holds the `GEMINI_API_KEY`. The model is `lyria-3.5`,
+reached as a single synchronous `generateContent` call that returns the audio
+inline (`infra/studio/src/lyria.ts`).
 
 **What worked.** Rendering is asynchronous, and the API (via the proxy) models
 that honestly: the tool returns a track id and a status of **`queued`**, never a
